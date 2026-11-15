@@ -1,30 +1,99 @@
-# Environment
+# ==========================================
+# Environment Variables & Secrets
+# ==========================================
+
 .env
 .env.*
 !.env.example
 
+# Private keys and certificates
+*.pem
+*.key
+*.p12
+*.pfx
+
+# ==========================================
 # Python
+# ==========================================
+
 __pycache__/
 *.py[cod]
-*.egg-info/
-.venv/
+*$py.class
 
-# Testing
+*.so
+
+# Distribution / Packaging
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Virtual Environment
+.venv/
+venv/
+env/
+
+# ==========================================
+# Python Tools & Cache
+# ==========================================
+
 .pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.hypothesis/
+
+# Coverage
 .coverage
+.coverage.*
 htmlcov/
 
-# Data
-data/sessions/*
-data/temp/*
+# ==========================================
+# Runtime Data
+# ==========================================
 
+data/sessions/*
+!data/sessions/.gitkeep
+
+data/temp/*
+!data/temp/.gitkeep
+
+# ==========================================
 # Logs
+# ==========================================
+
 logs/*
+!logs/.gitkeep
+
 *.log
 
-# IDE
-.idea/
+# ==========================================
+# IDE & Editor
+# ==========================================
 
-# OS
+.idea/
+.vscode/
+
+# ==========================================
+# OS Generated Files
+# ==========================================
+
 .DS_Store
 Thumbs.db
+desktop.ini
+
+# ==========================================
+# Temporary Files
+# ==========================================
+
+*.tmp
+*.bak
+*.swp
+*.swo
+*~
+
+# ==========================================
+# Jupyter
+# ==========================================
+
+.ipynb_checkpoints/

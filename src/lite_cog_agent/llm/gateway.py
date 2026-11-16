@@ -19,6 +19,13 @@ from lite_cog_agent.llm.exceptions import (
 )
 from lite_cog_agent.llm.providers.deepseek import DeepSeekProvider
 from lite_cog_agent.llm.schemas import LLMRequest, LLMResponse
+from lite_cog_agent.llm.response_validator import (
+    LLMResponseValidator,
+)
+from lite_cog_agent.llm.usage_tracker import (
+    TokenUsageTracker,
+    UsageSummary,
+)
 
 
 class LLMProvider(Protocol):
@@ -47,6 +54,7 @@ class LLMGateway:
             provider if provider is not None else self._create_provider()
         )
         self._closed = False
+        self._usage_tracker = TokenUsageTracker()
 
     @staticmethod
     def _create_provider() -> LLMProvider:
@@ -126,6 +134,18 @@ class LLMGateway:
                     f"Tool '{tool.name}' parameters must be a dictionary."
                 )
 
+    @property
+    def usage_summary(self) -> UsageSummary:
+        """Get aggregated token usage statistics."""
+
+        return self._usage_tracker.snapshot()
+
+    def reset_usage(self) -> None:
+        """Reset accumulated token usage statistics."""
+
+        self._usage_tracker.reset()
+
+
     async def chat(self, request: LLMRequest) -> LLMResponse:
         """Send a validated request through the configured provider."""
 
@@ -137,7 +157,7 @@ class LLMGateway:
         self._validate_request(request)
 
         try:
-            return await self._provider.chat_completion(request)
+            response = await self._provider.chat_completion(request)
 
         except LLMProviderError as exc:
             raise LLMGatewayError(
@@ -148,6 +168,14 @@ class LLMGateway:
             raise LLMGatewayError(
                 "Unexpected error occurred while calling the LLM provider."
             ) from exc
+
+        # Validate provider response before exposing it.
+        validated_response = LLMResponseValidator.validate(response)
+
+        # Record usage only after successful response validation.
+        self._usage_tracker.record(validated_response.usage)
+
+        return validated_response
 
     async def close(self) -> None:
         """Close the underlying provider and release resources."""

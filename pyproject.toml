@@ -24,3 +24,10 @@ dev = [
     "pytest>=9.2.0",
     "pytest-asyncio>=1.5.0",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+asyncio_mode = "strict"
+asyncio_default_fixture_loop_scope = "function"

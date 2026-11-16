@@ -12,6 +12,7 @@ from lite_cog_agent.llm.exceptions import (
     LLMConfigurationError,
     LLMGatewayError,
     LLMRequestError,
+    LLMResponseError,
 )
 
 
@@ -250,3 +251,102 @@ async def test_gateway_wraps_unexpected_provider_error():
     assert isinstance(exc_info.value.__cause__, RuntimeError)
 
     await gateway.close()
+
+
+@pytest.mark.asyncio
+async def test_gateway_records_token_usage():
+    provider = FakeProvider()
+    gateway = LLMGateway(provider=provider)
+
+    request = LLMRequest(
+        messages=[
+            LLMMessage(role="user", content="Hello.")
+        ]
+    )
+
+    await gateway.chat(request)
+
+    summary = gateway.usage_summary
+
+    assert summary.request_count == 1
+    assert summary.prompt_tokens == 10
+    assert summary.completion_tokens == 20
+    assert summary.total_tokens == 30
+
+    await gateway.close()
+
+
+@pytest.mark.asyncio
+async def test_gateway_accumulates_token_usage():
+    provider = FakeProvider()
+    gateway = LLMGateway(provider=provider)
+
+    request = LLMRequest(
+        messages=[
+            LLMMessage(role="user", content="Hello.")
+        ]
+    )
+
+    await gateway.chat(request)
+    await gateway.chat(request)
+
+    summary = gateway.usage_summary
+
+    assert summary.request_count == 2
+    assert summary.total_tokens == 60
+
+    await gateway.close()
+
+
+@pytest.mark.asyncio
+async def test_gateway_rejects_invalid_provider_response():
+    class InvalidResponseProvider:
+        async def chat_completion(
+            self,
+            request: LLMRequest,
+        ) -> LLMResponse:
+            return LLMResponse(
+                content=None,
+                usage=TokenUsage(),
+            )
+
+        async def close(self) -> None:
+            pass
+
+    gateway = LLMGateway(provider=InvalidResponseProvider())
+
+    request = LLMRequest(
+        messages=[
+            LLMMessage(role="user", content="Hello.")
+        ]
+    )
+
+    with pytest.raises(LLMResponseError):
+        await gateway.chat(request)
+
+    assert gateway.usage_summary.request_count == 0
+
+    await gateway.close()
+
+
+@pytest.mark.asyncio
+async def test_gateway_reset_usage():
+    provider = FakeProvider()
+    gateway = LLMGateway(provider=provider)
+
+    request = LLMRequest(
+        messages=[
+            LLMMessage(role="user", content="Hello.")
+        ]
+    )
+
+    await gateway.chat(request)
+    gateway.reset_usage()
+
+    summary = gateway.usage_summary
+
+    assert summary.request_count == 0
+    assert summary.total_tokens == 0
+
+    await gateway.close()
+

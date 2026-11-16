@@ -60,6 +60,13 @@ async def main() -> int:
             print("Prompt tokens:", response.usage.prompt_tokens)
             print("Completion tokens:", response.usage.completion_tokens)
             print("Total tokens:", response.usage.total_tokens)
+            summary = gateway.usage_summary
+
+            print("\nGateway Usage Summary:")
+            print("Request count:", summary.request_count)
+            print("Prompt tokens:", summary.prompt_tokens)
+            print("Completion tokens:", summary.completion_tokens)
+            print("Total tokens:", summary.total_tokens)
             print("-" * 60)
 
             print("\nDeepSeek Response:")

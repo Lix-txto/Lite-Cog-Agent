@@ -38,7 +38,7 @@ async def main() -> int:
                         ),
                     ),
                 ],
-                max_tokens=128,
+                max_tokens=256,
             )
 
             print("\n[1/3] Sending request to DeepSeek...")

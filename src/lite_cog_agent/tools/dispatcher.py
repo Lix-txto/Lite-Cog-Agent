@@ -177,3 +177,30 @@ class ToolDispatcher:
             error=result.error,
             metadata=metadata,
         )
+
+
+    async def dispatch_many(
+        self,
+        tool_calls: list[ToolCall],
+    ) -> list[ToolResult]:
+        """Dispatch multiple tool calls concurrently.
+
+        Results preserve the same order as the input tool calls.
+        Each call still passes through dispatch(), so parameter
+        validation, timeout, concurrency control, and error
+        handling remain centralized.
+        """
+        if not isinstance(tool_calls, list):
+            raise TypeError("tool_calls must be a list.")
+
+        if not tool_calls:
+            return []
+
+        return list(
+            await asyncio.gather(
+                *(
+                    self.dispatch(tool_call)
+                    for tool_call in tool_calls
+                )
+            )
+        )

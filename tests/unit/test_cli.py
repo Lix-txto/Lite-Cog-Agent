@@ -23,9 +23,7 @@ def test_print_help(capsys):
 
 
 def test_print_status(capsys):
-    gateway = SimpleNamespace(
-        usage_summary=SimpleNamespace(request_count=2)
-    )
+    gateway = SimpleNamespace(usage_summary=SimpleNamespace(request_count=2))
 
     cli.print_status(gateway, connected=True)
 

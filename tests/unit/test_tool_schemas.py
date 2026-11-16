@@ -4,9 +4,7 @@ from lite_cog_agent.tools.schemas import ToolResult
 
 
 def test_create_successful_tool_result():
-    result = ToolResult.ok(
-        output={"rows": 100, "columns": 5}
-    )
+    result = ToolResult.ok(output={"rows": 100, "columns": 5})
 
     assert result.success is True
     assert result.output == {"rows": 100, "columns": 5}
@@ -15,9 +13,7 @@ def test_create_successful_tool_result():
 
 
 def test_create_failed_tool_result():
-    result = ToolResult.fail(
-        error="Dataset file does not exist."
-    )
+    result = ToolResult.fail(error="Dataset file does not exist.")
 
     assert result.success is False
     assert result.output is None

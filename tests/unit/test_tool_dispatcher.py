@@ -24,9 +24,7 @@ class FakeTool(BaseTool):
     }
 
     async def execute(self, arguments: dict) -> ToolResult:
-        return ToolResult.ok(
-            {"result": arguments["value"] * 2}
-        )
+        return ToolResult.ok({"result": arguments["value"] * 2})
 
 
 class FakeFailingTool(BaseTool):

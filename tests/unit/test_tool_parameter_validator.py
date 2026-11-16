@@ -41,9 +41,7 @@ def test_validate_rejects_non_dictionary_schema():
 
 def test_validate_rejects_non_object_root_schema():
     with pytest.raises(ToolSchemaValidationError):
-        ToolParameterValidator.validate_schema(
-            {"type": "string"}
-        )
+        ToolParameterValidator.validate_schema({"type": "string"})
 
 
 def test_validate_rejects_invalid_json_schema():

@@ -82,11 +82,7 @@ def test_dispatch_adds_execution_metadata():
     tool = SuccessfulTool()
     dispatcher = create_dispatcher(tool)
 
-    result = asyncio.run(
-        dispatcher.dispatch(
-            create_tool_call("successful_tool")
-        )
-    )
+    result = asyncio.run(dispatcher.dispatch(create_tool_call("successful_tool")))
 
     assert result.success is True
     assert result.output == {"message": "success"}
@@ -102,11 +98,7 @@ def test_dispatch_preserves_tool_metadata():
     tool = SuccessfulTool()
     dispatcher = create_dispatcher(tool)
 
-    result = asyncio.run(
-        dispatcher.dispatch(
-            create_tool_call("successful_tool")
-        )
-    )
+    result = asyncio.run(dispatcher.dispatch(create_tool_call("successful_tool")))
 
     assert result.metadata["source"] == "test_tool"
     assert result.metadata["tool_name"] == "successful_tool"
@@ -116,11 +108,7 @@ def test_dispatch_converts_unexpected_exception():
     tool = FailingTool()
     dispatcher = create_dispatcher(tool)
 
-    result = asyncio.run(
-        dispatcher.dispatch(
-            create_tool_call("failing_tool")
-        )
-    )
+    result = asyncio.run(dispatcher.dispatch(create_tool_call("failing_tool")))
 
     assert result.success is False
     assert result.error == "Unexpected tool failure"
@@ -135,11 +123,7 @@ def test_dispatch_preserves_tool_reported_failure():
     tool = ReportedFailureTool()
     dispatcher = create_dispatcher(tool)
 
-    result = asyncio.run(
-        dispatcher.dispatch(
-            create_tool_call("reported_failure_tool")
-        )
-    )
+    result = asyncio.run(dispatcher.dispatch(create_tool_call("reported_failure_tool")))
 
     assert result.success is False
     assert result.error == "Business operation failed"
@@ -151,11 +135,7 @@ def test_dispatch_adds_metadata_to_missing_tool():
     registry = ToolRegistry()
     dispatcher = ToolDispatcher(registry=registry)
 
-    result = asyncio.run(
-        dispatcher.dispatch(
-            create_tool_call("missing_tool")
-        )
-    )
+    result = asyncio.run(dispatcher.dispatch(create_tool_call("missing_tool")))
 
     assert result.success is False
     assert result.metadata["tool_name"] == "missing_tool"
@@ -169,9 +149,7 @@ def test_dispatch_propagates_task_cancellation():
         dispatcher = create_dispatcher(tool)
 
         task = asyncio.create_task(
-            dispatcher.dispatch(
-                create_tool_call("blocking_tool")
-            )
+            dispatcher.dispatch(create_tool_call("blocking_tool"))
         )
 
         await asyncio.sleep(0.01)
@@ -185,9 +163,7 @@ def test_dispatch_propagates_task_cancellation():
 
         # A new call should still be able to acquire the semaphore.
         next_task = asyncio.create_task(
-            dispatcher.dispatch(
-                create_tool_call("blocking_tool")
-            )
+            dispatcher.dispatch(create_tool_call("blocking_tool"))
         )
 
         await asyncio.sleep(0.01)

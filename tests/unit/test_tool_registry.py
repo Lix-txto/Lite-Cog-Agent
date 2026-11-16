@@ -39,9 +39,7 @@ class ExampleTool(BaseTool):
         }
 
     async def execute(self, arguments: dict) -> ToolResult:
-        return ToolResult.ok(
-            output={"received": arguments["value"]}
-        )
+        return ToolResult.ok(output={"received": arguments["value"]})
 
 
 class InvalidNameTool(ExampleTool):
@@ -181,9 +179,7 @@ def test_get_definitions():
     assert len(definitions) == 1
     assert isinstance(definitions[0], ToolDefinition)
     assert definitions[0].name == "example_tool"
-    assert definitions[0].description == (
-        "An example tool for testing."
-    )
+    assert definitions[0].description == ("An example tool for testing.")
     assert definitions[0].parameters["type"] == "object"
 
 

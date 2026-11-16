@@ -38,9 +38,7 @@ class TrackingTool(BaseTool):
         try:
             await asyncio.sleep(self.delay_seconds)
 
-            return ToolResult.ok(
-                {"status": "completed"}
-            )
+            return ToolResult.ok({"status": "completed"})
         finally:
             self.active_count -= 1
 
@@ -84,16 +82,10 @@ def test_dispatch_respects_max_concurrency():
             max_concurrency=2,
         )
 
-        tool_calls = [
-            create_tool_call(f"call_{index}")
-            for index in range(5)
-        ]
+        tool_calls = [create_tool_call(f"call_{index}") for index in range(5)]
 
         results = await asyncio.gather(
-            *[
-                dispatcher.dispatch(tool_call)
-                for tool_call in tool_calls
-            ]
+            *[dispatcher.dispatch(tool_call) for tool_call in tool_calls]
         )
 
         assert len(results) == 5
@@ -115,13 +107,9 @@ def test_dispatch_releases_semaphore_after_execution():
             max_concurrency=1,
         )
 
-        first_result = await dispatcher.dispatch(
-            create_tool_call("first_call")
-        )
+        first_result = await dispatcher.dispatch(create_tool_call("first_call"))
 
-        second_result = await dispatcher.dispatch(
-            create_tool_call("second_call")
-        )
+        second_result = await dispatcher.dispatch(create_tool_call("second_call"))
 
         assert first_result.success is True
         assert second_result.success is True
@@ -142,22 +130,16 @@ def test_dispatch_releases_semaphore_after_timeout():
             max_concurrency=1,
         )
 
-        first_result = await dispatcher.dispatch(
-            create_tool_call("timeout_call")
-        )
+        first_result = await dispatcher.dispatch(create_tool_call("timeout_call"))
 
         assert first_result.success is False
-        assert first_result.metadata["error_type"] == (
-            "ToolExecutionTimeoutError"
-        )
+        assert first_result.metadata["error_type"] == ("ToolExecutionTimeoutError")
         assert tool.active_count == 0
 
         # Replace the delay so the next call can complete.
         tool.delay_seconds = 0.01
 
-        second_result = await dispatcher.dispatch(
-            create_tool_call("next_call")
-        )
+        second_result = await dispatcher.dispatch(create_tool_call("next_call"))
 
         assert second_result.success is True
         assert tool.active_count == 0

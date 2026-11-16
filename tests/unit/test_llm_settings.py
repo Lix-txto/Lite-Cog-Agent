@@ -1,4 +1,3 @@
-
 import pytest
 
 from lite_cog_agent.config.settings import (
@@ -36,8 +35,6 @@ def test_get_positive_int_env_rejects_zero(monkeypatch):
 
 
 def test_resolve_project_path():
-    result = resolve_project_path(
-        __import__("pathlib").Path("./data")
-    )
+    result = resolve_project_path(__import__("pathlib").Path("./data"))
 
     assert result.is_absolute()

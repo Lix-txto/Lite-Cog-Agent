@@ -23,29 +23,19 @@ class ToolExecutionConfig:
         if isinstance(self.timeout_seconds, bool) or not isinstance(
             self.timeout_seconds, (int, float)
         ):
-            raise TypeError(
-                "timeout_seconds must be an integer or float."
-            )
+            raise TypeError("timeout_seconds must be an integer or float.")
 
         if not math.isfinite(self.timeout_seconds):
-            raise ValueError(
-                "timeout_seconds must be a finite number."
-            )
+            raise ValueError("timeout_seconds must be a finite number.")
 
         if self.timeout_seconds <= 0:
-            raise ValueError(
-                "timeout_seconds must be greater than 0."
-            )
+            raise ValueError("timeout_seconds must be greater than 0.")
 
         # Validate max_concurrency.
         if isinstance(self.max_concurrency, bool) or not isinstance(
             self.max_concurrency, int
         ):
-            raise TypeError(
-                "max_concurrency must be an integer."
-            )
+            raise TypeError("max_concurrency must be an integer.")
 
         if self.max_concurrency <= 0:
-            raise ValueError(
-                "max_concurrency must be greater than 0."
-            )
+            raise ValueError("max_concurrency must be greater than 0.")

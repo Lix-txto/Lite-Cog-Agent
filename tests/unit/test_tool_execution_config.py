@@ -86,9 +86,7 @@ def test_max_concurrency_rejects_boolean():
 )
 def test_max_concurrency_must_be_positive(max_concurrency):
     with pytest.raises(ValueError, match="greater than 0"):
-        ToolExecutionConfig(
-            max_concurrency=max_concurrency
-        )
+        ToolExecutionConfig(max_concurrency=max_concurrency)
 
 
 def test_execution_config_is_immutable():

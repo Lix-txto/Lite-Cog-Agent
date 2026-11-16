@@ -34,9 +34,7 @@ class ToolDispatcher:
         self._validator = validator or ToolParameterValidator()
         self._config = config or ToolExecutionConfig()
 
-        self._semaphore = asyncio.Semaphore(
-            self._config.max_concurrency
-        )
+        self._semaphore = asyncio.Semaphore(self._config.max_concurrency)
 
     @staticmethod
     def _build_failure_result(
@@ -117,9 +115,7 @@ class ToolDispatcher:
                     timeout_seconds=self._config.timeout_seconds,
                 )
 
-                execution_time_seconds = (
-                    time.perf_counter() - started_at
-                )
+                execution_time_seconds = time.perf_counter() - started_at
 
                 return self._build_failure_result(
                     str(timeout_error),
@@ -130,9 +126,7 @@ class ToolDispatcher:
                 )
 
             except ToolExecutionError as exc:
-                execution_time_seconds = (
-                    time.perf_counter() - started_at
-                )
+                execution_time_seconds = time.perf_counter() - started_at
 
                 return self._build_failure_result(
                     str(exc),
@@ -143,9 +137,7 @@ class ToolDispatcher:
                 )
 
             except Exception as exc:
-                execution_time_seconds = (
-                    time.perf_counter() - started_at
-                )
+                execution_time_seconds = time.perf_counter() - started_at
 
                 return self._build_failure_result(
                     str(exc),
@@ -155,9 +147,7 @@ class ToolDispatcher:
                     queue_wait_seconds=queue_wait_seconds,
                 )
 
-            execution_time_seconds = (
-                time.perf_counter() - started_at
-            )
+            execution_time_seconds = time.perf_counter() - started_at
 
         if not isinstance(result, ToolResult):
             return self._build_failure_result(
@@ -173,9 +163,7 @@ class ToolDispatcher:
             "status": "success" if result.success else "failed",
             "execution_time_seconds": execution_time_seconds,
             "queue_wait_seconds": queue_wait_seconds,
-            "error_type": (
-                None if result.success else "ToolReportedFailure"
-            ),
+            "error_type": (None if result.success else "ToolReportedFailure"),
         }
 
         metadata = {

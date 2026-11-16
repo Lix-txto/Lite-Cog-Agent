@@ -65,17 +65,13 @@ def test_dispatch_returns_failure_on_timeout():
         timeout_seconds=0.05,
     )
 
-    result = asyncio.run(
-        dispatcher.dispatch(create_tool_call())
-    )
+    result = asyncio.run(dispatcher.dispatch(create_tool_call()))
 
     assert result.success is False
     assert "timed out" in result.error.lower()
     assert result.metadata["tool_name"] == "slow_tool"
     assert result.metadata["status"] == "failed"
-    assert result.metadata["error_type"] == (
-        "ToolExecutionTimeoutError"
-    )
+    assert result.metadata["error_type"] == ("ToolExecutionTimeoutError")
     assert result.metadata["execution_time_seconds"] >= 0.05
 
 
@@ -86,9 +82,7 @@ def test_dispatch_cancels_timed_out_tool():
         timeout_seconds=0.05,
     )
 
-    result = asyncio.run(
-        dispatcher.dispatch(create_tool_call())
-    )
+    result = asyncio.run(dispatcher.dispatch(create_tool_call()))
 
     assert result.success is False
     assert tool.cancelled is True
@@ -101,9 +95,7 @@ def test_dispatch_completes_before_timeout():
         timeout_seconds=1.0,
     )
 
-    result = asyncio.run(
-        dispatcher.dispatch(create_tool_call())
-    )
+    result = asyncio.run(dispatcher.dispatch(create_tool_call()))
 
     assert result.success is True
     assert result.output == {"status": "completed"}

@@ -45,21 +45,15 @@ class ToolRegistry:
         """
 
         if not isinstance(tool, BaseTool):
-            raise TypeError(
-                "Registered tool must be an instance of BaseTool."
-            )
+            raise TypeError("Registered tool must be an instance of BaseTool.")
 
         name = tool.name
 
         if not isinstance(name, str) or not name.strip():
-            raise ValueError(
-                "Tool name must be a non-empty string."
-            )
+            raise ValueError("Tool name must be a non-empty string.")
 
         if name in self._tools:
-            raise DuplicateToolError(
-                f"Tool '{name}' is already registered."
-            )
+            raise DuplicateToolError(f"Tool '{name}' is already registered.")
 
         self._tools[name] = tool
 
@@ -95,9 +89,7 @@ class ToolRegistry:
         try:
             return self._tools[name]
         except KeyError as exc:
-            raise ToolNotFoundError(
-                f"Tool '{name}' is not registered."
-            ) from exc
+            raise ToolNotFoundError(f"Tool '{name}' is not registered.") from exc
 
     def list_tools(self) -> list[BaseTool]:
         """Return a new list containing all registered tools."""
@@ -111,10 +103,7 @@ class ToolRegistry:
         Each definition is generated through BaseTool.to_definition().
         """
 
-        return [
-            tool.to_definition()
-            for tool in self._tools.values()
-        ]
+        return [tool.to_definition() for tool in self._tools.values()]
 
     def __len__(self) -> int:
         """Return the number of registered tools."""

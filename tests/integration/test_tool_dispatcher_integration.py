@@ -97,12 +97,7 @@ def test_dispatcher_integrates_success_failure_and_metadata():
             create_call("success_2"),
         ]
 
-        results = await asyncio.gather(
-            *[
-                dispatcher.dispatch(call)
-                for call in calls
-            ]
-        )
+        results = await asyncio.gather(*[dispatcher.dispatch(call) for call in calls])
 
         assert results[0].success is True
         assert results[1].success is False
@@ -131,17 +126,9 @@ def test_dispatcher_concurrent_calls_do_not_leak_slots():
     async def run_test():
         dispatcher, tool = create_integration_dispatcher()
 
-        calls = [
-            create_call(f"concurrent_{index}")
-            for index in range(6)
-        ]
+        calls = [create_call(f"concurrent_{index}") for index in range(6)]
 
-        results = await asyncio.gather(
-            *[
-                dispatcher.dispatch(call)
-                for call in calls
-            ]
-        )
+        results = await asyncio.gather(*[dispatcher.dispatch(call) for call in calls])
 
         assert all(result.success for result in results)
         assert tool.max_active_count == 2

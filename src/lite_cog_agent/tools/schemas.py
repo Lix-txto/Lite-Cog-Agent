@@ -35,14 +35,10 @@ class ToolResult:
             raise TypeError("ToolResult.success must be a boolean.")
 
         if self.success and self.error is not None:
-            raise ValueError(
-                "A successful ToolResult cannot contain an error."
-            )
+            raise ValueError("A successful ToolResult cannot contain an error.")
 
         if not self.success and not self.error:
-            raise ValueError(
-                "A failed ToolResult must contain an error message."
-            )
+            raise ValueError("A failed ToolResult must contain an error message.")
 
         if not isinstance(self.metadata, dict):
             raise TypeError("ToolResult.metadata must be a dictionary.")

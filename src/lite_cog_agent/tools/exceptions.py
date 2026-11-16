@@ -3,7 +3,6 @@ Exception hierarchy for the tool infrastructure.
 """
 
 
-
 class ToolError(Exception):
     """Base exception for tool-related errors."""
 

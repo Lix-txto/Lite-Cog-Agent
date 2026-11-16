@@ -30,9 +30,7 @@ class ExampleTool(BaseTool):
         }
 
     async def execute(self, arguments: dict) -> ToolResult:
-        return ToolResult.ok(
-            output={"received": arguments["value"]}
-        )
+        return ToolResult.ok(output={"received": arguments["value"]})
 
 
 def test_base_tool_metadata():
@@ -58,9 +56,7 @@ def test_base_tool_to_definition():
 async def test_base_tool_execute():
     tool = ExampleTool()
 
-    result = await tool.execute(
-        {"value": "hello"}
-    )
+    result = await tool.execute({"value": "hello"})
 
     assert result.success is True
     assert result.output == {"received": "hello"}

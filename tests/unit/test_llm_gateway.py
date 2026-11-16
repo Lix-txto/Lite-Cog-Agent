@@ -125,11 +125,7 @@ async def test_gateway_rejects_request_after_close():
 
     await gateway.close()
 
-    request = LLMRequest(
-        messages=[
-            LLMMessage(role="user", content="Hello.")
-        ]
-    )
+    request = LLMRequest(messages=[LLMMessage(role="user", content="Hello.")])
 
     with pytest.raises(LLMGatewayError):
         await gateway.chat(request)
@@ -151,11 +147,7 @@ async def test_gateway_async_context_manager():
     provider = FakeProvider()
 
     async with LLMGateway(provider=provider) as gateway:
-        request = LLMRequest(
-            messages=[
-                LLMMessage(role="user", content="Hello.")
-            ]
-        )
+        request = LLMRequest(messages=[LLMMessage(role="user", content="Hello.")])
 
         response = await gateway.chat(request)
 
@@ -164,16 +156,13 @@ async def test_gateway_async_context_manager():
     assert provider.closed is True
 
 
-
 @pytest.mark.asyncio
 async def test_gateway_rejects_invalid_temperature():
     provider = FakeProvider()
     gateway = LLMGateway(provider=provider)
 
     request = LLMRequest(
-        messages=[
-            LLMMessage(role="user", content="Hello.")
-        ],
+        messages=[LLMMessage(role="user", content="Hello.")],
         temperature=5.0,
     )
 
@@ -191,9 +180,7 @@ async def test_gateway_rejects_invalid_max_tokens():
     gateway = LLMGateway(provider=provider)
 
     request = LLMRequest(
-        messages=[
-            LLMMessage(role="user", content="Hello.")
-        ],
+        messages=[LLMMessage(role="user", content="Hello.")],
         max_tokens=0,
     )
 
@@ -211,9 +198,7 @@ async def test_gateway_rejects_empty_model():
     gateway = LLMGateway(provider=provider)
 
     request = LLMRequest(
-        messages=[
-            LLMMessage(role="user", content="Hello.")
-        ],
+        messages=[LLMMessage(role="user", content="Hello.")],
         model="   ",
     )
 
@@ -239,11 +224,7 @@ async def test_gateway_wraps_unexpected_provider_error():
 
     gateway = LLMGateway(provider=UnexpectedErrorProvider())
 
-    request = LLMRequest(
-        messages=[
-            LLMMessage(role="user", content="Hello.")
-        ]
-    )
+    request = LLMRequest(messages=[LLMMessage(role="user", content="Hello.")])
 
     with pytest.raises(LLMGatewayError) as exc_info:
         await gateway.chat(request)
@@ -258,11 +239,7 @@ async def test_gateway_records_token_usage():
     provider = FakeProvider()
     gateway = LLMGateway(provider=provider)
 
-    request = LLMRequest(
-        messages=[
-            LLMMessage(role="user", content="Hello.")
-        ]
-    )
+    request = LLMRequest(messages=[LLMMessage(role="user", content="Hello.")])
 
     await gateway.chat(request)
 
@@ -281,11 +258,7 @@ async def test_gateway_accumulates_token_usage():
     provider = FakeProvider()
     gateway = LLMGateway(provider=provider)
 
-    request = LLMRequest(
-        messages=[
-            LLMMessage(role="user", content="Hello.")
-        ]
-    )
+    request = LLMRequest(messages=[LLMMessage(role="user", content="Hello.")])
 
     await gateway.chat(request)
     await gateway.chat(request)
@@ -315,11 +288,7 @@ async def test_gateway_rejects_invalid_provider_response():
 
     gateway = LLMGateway(provider=InvalidResponseProvider())
 
-    request = LLMRequest(
-        messages=[
-            LLMMessage(role="user", content="Hello.")
-        ]
-    )
+    request = LLMRequest(messages=[LLMMessage(role="user", content="Hello.")])
 
     with pytest.raises(LLMResponseError):
         await gateway.chat(request)
@@ -334,11 +303,7 @@ async def test_gateway_reset_usage():
     provider = FakeProvider()
     gateway = LLMGateway(provider=provider)
 
-    request = LLMRequest(
-        messages=[
-            LLMMessage(role="user", content="Hello.")
-        ]
-    )
+    request = LLMRequest(messages=[LLMMessage(role="user", content="Hello.")])
 
     await gateway.chat(request)
     gateway.reset_usage()
@@ -349,4 +314,3 @@ async def test_gateway_reset_usage():
     assert summary.total_tokens == 0
 
     await gateway.close()
-

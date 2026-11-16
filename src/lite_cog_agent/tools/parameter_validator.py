@@ -65,9 +65,7 @@ class ToolParameterValidator:
         cls.validate_schema(schema)
 
         if not isinstance(arguments, dict):
-            raise ToolParameterValidationError(
-                "Tool arguments must be a dictionary."
-            )
+            raise ToolParameterValidationError("Tool arguments must be a dictionary.")
 
         validator = Draft202012Validator(schema)
 
@@ -83,9 +81,7 @@ class ToolParameterValidator:
             details = []
 
             for error in errors:
-                path = ".".join(
-                    str(part) for part in error.absolute_path
-                )
+                path = ".".join(str(part) for part in error.absolute_path)
 
                 location = path or "<root>"
                 details.append(f"{location}: {error.message}")

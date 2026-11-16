@@ -1,4 +1,3 @@
-
 import pytest
 
 from lite_cog_agent.llm.exceptions import LLMConfigurationError
@@ -43,4 +42,5 @@ def test_provider_accepts_valid_configuration():
     assert provider.model == "deepseek-flash"
 
     import asyncio
+
     asyncio.run(provider.close())

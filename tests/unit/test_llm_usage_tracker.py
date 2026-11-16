@@ -1,4 +1,3 @@
-
 import pytest
 
 from lite_cog_agent.llm.exceptions import LLMResponseError

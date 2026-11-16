@@ -1,13 +1,9 @@
 import asyncio
 
-import pytest
-
 from lite_cog_agent.llm.schemas import ToolCall
 from lite_cog_agent.tools.base import BaseTool
 from lite_cog_agent.tools.dispatcher import ToolDispatcher
-from lite_cog_agent.tools.exceptions import (
-    ToolExecutionTimeoutError,
-)
+
 from lite_cog_agent.tools.execution_config import ToolExecutionConfig
 from lite_cog_agent.tools.registry import ToolRegistry
 from lite_cog_agent.tools.schemas import ToolResult
@@ -146,21 +142,24 @@ def test_dispatch_releases_semaphore_after_timeout():
             max_concurrency=1,
         )
 
-        with pytest.raises(ToolExecutionTimeoutError):
-            await dispatcher.dispatch(
-                create_tool_call("timeout_call")
-            )
+        first_result = await dispatcher.dispatch(
+            create_tool_call("timeout_call")
+        )
 
+        assert first_result.success is False
+        assert first_result.metadata["error_type"] == (
+            "ToolExecutionTimeoutError"
+        )
         assert tool.active_count == 0
 
         # Replace the delay so the next call can complete.
         tool.delay_seconds = 0.01
 
-        result = await dispatcher.dispatch(
+        second_result = await dispatcher.dispatch(
             create_tool_call("next_call")
         )
 
-        assert result.success is True
+        assert second_result.success is True
         assert tool.active_count == 0
 
     asyncio.run(run_test())

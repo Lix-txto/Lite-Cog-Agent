@@ -1,13 +1,9 @@
 import asyncio
 
-import pytest
-
 from lite_cog_agent.llm.schemas import ToolCall
 from lite_cog_agent.tools.base import BaseTool
 from lite_cog_agent.tools.dispatcher import ToolDispatcher
-from lite_cog_agent.tools.exceptions import (
-    ToolExecutionTimeoutError,
-)
+
 from lite_cog_agent.tools.execution_config import ToolExecutionConfig
 from lite_cog_agent.tools.registry import ToolRegistry
 from lite_cog_agent.tools.schemas import ToolResult
@@ -62,42 +58,44 @@ def create_tool_call() -> ToolCall:
     )
 
 
-def test_dispatch_raises_timeout_error():
+def test_dispatch_returns_failure_on_timeout():
     tool = SlowTool(delay_seconds=1.0)
-
     dispatcher = create_dispatcher(
         tool=tool,
         timeout_seconds=0.05,
     )
 
-    with pytest.raises(ToolExecutionTimeoutError) as exc_info:
-        asyncio.run(
-            dispatcher.dispatch(create_tool_call())
-        )
+    result = asyncio.run(
+        dispatcher.dispatch(create_tool_call())
+    )
 
-    assert exc_info.value.tool_name == "slow_tool"
-    assert exc_info.value.timeout_seconds == 0.05
+    assert result.success is False
+    assert "timed out" in result.error.lower()
+    assert result.metadata["tool_name"] == "slow_tool"
+    assert result.metadata["status"] == "failed"
+    assert result.metadata["error_type"] == (
+        "ToolExecutionTimeoutError"
+    )
+    assert result.metadata["execution_time_seconds"] >= 0.05
 
 
 def test_dispatch_cancels_timed_out_tool():
     tool = SlowTool(delay_seconds=1.0)
-
     dispatcher = create_dispatcher(
         tool=tool,
         timeout_seconds=0.05,
     )
 
-    with pytest.raises(ToolExecutionTimeoutError):
-        asyncio.run(
-            dispatcher.dispatch(create_tool_call())
-        )
+    result = asyncio.run(
+        dispatcher.dispatch(create_tool_call())
+    )
 
+    assert result.success is False
     assert tool.cancelled is True
 
 
 def test_dispatch_completes_before_timeout():
     tool = SlowTool(delay_seconds=0.01)
-
     dispatcher = create_dispatcher(
         tool=tool,
         timeout_seconds=1.0,
@@ -109,4 +107,9 @@ def test_dispatch_completes_before_timeout():
 
     assert result.success is True
     assert result.output == {"status": "completed"}
+    assert result.metadata["tool_name"] == "slow_tool"
+    assert result.metadata["status"] == "success"
+    assert result.metadata["error_type"] is None
+    assert result.metadata["execution_time_seconds"] >= 0
+    assert result.metadata["queue_wait_seconds"] >= 0
     assert tool.cancelled is False

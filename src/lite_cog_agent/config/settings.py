@@ -1,40 +1,36 @@
 
+"""
+Application configuration loaded from environment variables.
+"""
+
 import os
 from pathlib import Path
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
-
-# ==========================================
-# Project Root
-# ==========================================
-
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-
 ENV_FILE = PROJECT_ROOT / ".env"
 
-# Load environment variables from project root.
 load_dotenv(dotenv_path=ENV_FILE)
 
 
-# ==========================================
-# Environment Helpers
-# ==========================================
-
 def get_env(key: str, default: str) -> str:
-    """Read a string environment variable."""
-    return os.getenv(key, default)
+    """Read an environment variable and strip whitespace."""
+
+    return os.getenv(key, default).strip()
 
 
 def get_int_env(key: str, default: int) -> int:
-    """Read and validate an integer environment variable."""
+    """Read an integer environment variable."""
+
     value = os.getenv(key)
 
     if value is None:
         return default
 
     try:
-        return int(value)
+        return int(value.strip())
     except ValueError as exc:
         raise ValueError(
             f"Environment variable {key} must be an integer."
@@ -42,7 +38,8 @@ def get_int_env(key: str, default: int) -> int:
 
 
 def get_positive_int_env(key: str, default: int) -> int:
-    """Read an integer environment variable and require it to be positive."""
+    """Read a positive integer environment variable."""
+
     value = get_int_env(key, default)
 
     if value <= 0:
@@ -53,81 +50,91 @@ def get_positive_int_env(key: str, default: int) -> int:
     return value
 
 
-# ==========================================
-# LLM Configuration
-# ==========================================
+def resolve_project_path(path: Path) -> Path:
+    """Resolve a path relative to the project root."""
 
-LLM_PROVIDER = get_env("LLM_PROVIDER", "deepseek")
+    if path.is_absolute():
+        return path
+
+    return (PROJECT_ROOT / path).resolve()
+
+
+# ---------------------------------------------------------
+# LLM configuration
+# ---------------------------------------------------------
+
+LLM_PROVIDER = get_env("LLM_PROVIDER", "deepseek").lower()
 
 DEEPSEEK_API_KEY = get_env("DEEPSEEK_API_KEY", "")
+
 DEEPSEEK_BASE_URL = get_env(
     "DEEPSEEK_BASE_URL",
     "https://api.deepseek.com",
 )
-DEEPSEEK_MODEL = get_env("DEEPSEEK_MODEL", "deepseek-chat")
+
+DEEPSEEK_MODEL = get_env(
+    "DEEPSEEK_MODEL",
+    "deepseek-flash",
+)
 
 
-# ==========================================
-# Agent Configuration
-# ==========================================
+# ---------------------------------------------------------
+# Agent configuration
+# ---------------------------------------------------------
 
 AGENT_MAX_ITERATIONS = get_positive_int_env(
-    "AGENT_MAX_ITERATIONS",
-    10,
+    "AGENT_MAX_ITERATIONS", 10
 )
 
 AGENT_MAX_TOOL_CALLS = get_positive_int_env(
-    "AGENT_MAX_TOOL_CALLS",
-    15,
+    "AGENT_MAX_TOOL_CALLS", 15
 )
 
 
-# ==========================================
-# Python Execution Configuration
-# ==========================================
+# ---------------------------------------------------------
+# Python execution configuration
+# ---------------------------------------------------------
 
 PYTHON_EXECUTION_TIMEOUT = get_positive_int_env(
-    "PYTHON_EXECUTION_TIMEOUT",
-    30,
+    "PYTHON_EXECUTION_TIMEOUT", 30
 )
 
 PYTHON_MAX_OUTPUT_SIZE = get_positive_int_env(
-    "PYTHON_MAX_OUTPUT_SIZE",
-    10000,
+    "PYTHON_MAX_OUTPUT_SIZE", 10000
 )
 
 
-# ==========================================
-# Storage Configuration
-# ==========================================
+# ---------------------------------------------------------
+# Storage configuration
+# ---------------------------------------------------------
 
-DATA_DIR = Path(
-    get_env("DATA_DIR", "./data")
+DATA_DIR = resolve_project_path(
+    Path(get_env("DATA_DIR", "./data"))
 )
 
-SESSION_DIR = Path(
-    get_env("SESSION_DIR", "./data/sessions")
+SESSION_DIR = resolve_project_path(
+    Path(get_env("SESSION_DIR", "./data/sessions"))
 )
 
-TEMP_DIR = Path(
-    get_env("TEMP_DIR", "./data/temp")
+TEMP_DIR = resolve_project_path(
+    Path(get_env("TEMP_DIR", "./data/temp"))
 )
 
 
-# ==========================================
-# Logging Configuration
-# ==========================================
+# ---------------------------------------------------------
+# Logging configuration
+# ---------------------------------------------------------
 
 LOG_LEVEL = get_env("LOG_LEVEL", "INFO").upper()
 
-LOG_DIR = Path(
-    get_env("LOG_DIR", "./logs")
+LOG_DIR = resolve_project_path(
+    Path(get_env("LOG_DIR", "./logs"))
 )
 
 
-# ==========================================
-# Settings Validation
-# ==========================================
+# ---------------------------------------------------------
+# Configuration validation
+# ---------------------------------------------------------
 
 if LLM_PROVIDER != "deepseek":
     raise ValueError(
@@ -135,22 +142,29 @@ if LLM_PROVIDER != "deepseek":
         "Currently only 'deepseek' is supported."
     )
 
-if LOG_LEVEL not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
+if not DEEPSEEK_BASE_URL:
+    raise ValueError("DEEPSEEK_BASE_URL cannot be empty.")
+
+parsed_base_url = urlparse(DEEPSEEK_BASE_URL)
+
+if parsed_base_url.scheme not in {"http", "https"}:
     raise ValueError(
-        f"Invalid LOG_LEVEL: {LOG_LEVEL}"
+        "DEEPSEEK_BASE_URL must use HTTP or HTTPS."
     )
 
+if not parsed_base_url.netloc:
+    raise ValueError(
+        "DEEPSEEK_BASE_URL must contain a valid host."
+    )
 
-# Resolve relative paths against the project root.
-def resolve_project_path(path: Path) -> Path:
-    """Resolve a relative path against the project root."""
-    if path.is_absolute():
-        return path
+if not DEEPSEEK_MODEL:
+    raise ValueError("DEEPSEEK_MODEL cannot be empty.")
 
-    return (PROJECT_ROOT / path).resolve()
-
-
-DATA_DIR = resolve_project_path(DATA_DIR)
-SESSION_DIR = resolve_project_path(SESSION_DIR)
-TEMP_DIR = resolve_project_path(TEMP_DIR)
-LOG_DIR = resolve_project_path(LOG_DIR)
+if LOG_LEVEL not in {
+    "DEBUG",
+    "INFO",
+    "WARNING",
+    "ERROR",
+    "CRITICAL",
+}:
+    raise ValueError(f"Invalid LOG_LEVEL: {LOG_LEVEL}")

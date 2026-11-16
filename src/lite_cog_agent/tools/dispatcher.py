@@ -1,14 +1,20 @@
 from __future__ import annotations
 
+import asyncio
+
 from lite_cog_agent.llm.schemas import ToolCall
-from lite_cog_agent.tools.base import BaseTool
 from lite_cog_agent.tools.exceptions import (
+    ToolExecutionTimeoutError,
     ToolParameterValidationError,
 )
+from lite_cog_agent.tools.execution_config import ToolExecutionConfig
 from lite_cog_agent.tools.parameter_validator import (
     ToolParameterValidator,
 )
-from lite_cog_agent.tools.registry import ToolRegistry, ToolNotFoundError
+from lite_cog_agent.tools.registry import (
+    ToolNotFoundError,
+    ToolRegistry,
+)
 from lite_cog_agent.tools.schemas import ToolResult
 
 
@@ -19,10 +25,16 @@ class ToolDispatcher:
         self,
         registry: ToolRegistry,
         validator: ToolParameterValidator | None = None,
+        config: ToolExecutionConfig | None = None,
     ) -> None:
         self._registry = registry
         self._validator = validator or ToolParameterValidator()
+        self._config = config or ToolExecutionConfig()
 
+        # Limit the number of concurrently executing tools.
+        self._semaphore = asyncio.Semaphore(
+            self._config.max_concurrency
+        )
 
     async def dispatch(
         self,
@@ -30,13 +42,11 @@ class ToolDispatcher:
     ) -> ToolResult:
         """Find, validate, and execute a tool call."""
 
-        # 1. Validate the ToolCall object.
         if not isinstance(tool_call, ToolCall):
             return ToolResult.fail(
                 "Invalid tool call: expected a ToolCall instance."
             )
 
-        # 2. Find the registered tool.
         try:
             tool = self._registry.get(tool_call.name)
         except ToolNotFoundError:
@@ -44,7 +54,6 @@ class ToolDispatcher:
                 f"Tool not found: {tool_call.name}"
             )
 
-        # 3. Validate tool arguments.
         try:
             self._validator.validate_arguments(
                 tool.parameters,
@@ -53,14 +62,26 @@ class ToolDispatcher:
         except ToolParameterValidationError as exc:
             return ToolResult.fail(str(exc))
 
-        # 4. Execute the tool.
-        result = await tool.execute(tool_call.arguments)
+        # Wait for an available execution slot.
+        async with self._semaphore:
+            try:
+                result = await asyncio.wait_for(
+                    tool.execute(tool_call.arguments),
+                    timeout=self._config.timeout_seconds,
+                )
+            except TimeoutError as exc:
+                raise ToolExecutionTimeoutError(
+                    (
+                        f"Tool '{tool.name}' execution timed out "
+                        f"after {self._config.timeout_seconds} seconds."
+                    ),
+                    tool_name=tool.name,
+                    timeout_seconds=self._config.timeout_seconds,
+                ) from exc
 
-        # 5. Verify the execution result.
         if not isinstance(result, ToolResult):
             return ToolResult.fail(
                 f"Tool '{tool.name}' returned an invalid result."
             )
 
         return result
-

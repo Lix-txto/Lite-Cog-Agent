@@ -9,7 +9,10 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "jsonschema>=4.26.0",
+    "matplotlib>=3.11.2",
     "openai>=3.49.0",
+    "openpyxl>=3.1.5",
+    "pandas>=3.1.1",
     "python-dotenv>=1.2.4",
 ]
 

@@ -58,6 +58,8 @@ data/sessions/*
 data/temp/*
 !data/temp/.gitkeep
 
+data/artifacts/*
+!data/artifacts/.gitkeep
 # ==========================================
 # Logs
 # ==========================================

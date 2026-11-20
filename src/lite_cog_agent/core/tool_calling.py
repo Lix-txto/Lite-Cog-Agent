@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import dataclass
+from lite_cog_agent.core.messages import (
+    MessageHistoryError,
+    validate_message_history,
+)
 from lite_cog_agent.llm.gateway import LLMGateway
 from lite_cog_agent.llm.schemas import (
     LLMMessage,
@@ -31,6 +37,14 @@ class ToolCallingLimitError(ToolCallingError):
 
 class ToolCallingProtocolError(ToolCallingError):
     """Raised when an LLM response violates the tool-calling protocol."""
+
+
+@dataclass(slots=True)
+class ToolCallingExecution:
+    """Result of a tool-calling execution with complete history."""
+
+    response: LLMResponse
+    messages: list[LLMMessage]
 
 
 class ToolCallingService:
@@ -124,121 +138,84 @@ class ToolCallingService:
     def _validate_message_history(
         messages: list[LLMMessage],
     ) -> set[str]:
-        """Validate message history and return historical Tool Call IDs."""
+        """Validate message history using the shared protocol."""
 
-        if not isinstance(messages, list):
+        try:
+            return validate_message_history(messages)
+
+        except MessageHistoryError as exc:
             raise ToolCallingProtocolError(
-                "Message history must be a list."
-            )
-
-        supported_roles = {
-            "system",
-            "user",
-            "assistant",
-            "tool",
-        }
-
-        seen_tool_call_ids: set[str] = set()
-        pending_tool_call_ids: set[str] = set()
-
-        for index, message in enumerate(messages):
-            if not isinstance(message, LLMMessage):
-                raise ToolCallingProtocolError(
-                    f"Message at index {index} must be an LLMMessage instance."
-                )
-
-            if message.role not in supported_roles:
-                raise ToolCallingProtocolError(
-                    f"Unsupported message role at index {index}: "
-                    f"{message.role!r}."
-                )
-
-            if not isinstance(message.tool_calls, list):
-                raise ToolCallingProtocolError(
-                    f"Message.tool_calls at index {index} must be a list."
-                )
-
-            # Non-assistant messages cannot contain Tool Calls.
-            if message.role != "assistant" and message.tool_calls:
-                raise ToolCallingProtocolError(
-                    f"Only assistant messages can contain tool_calls. "
-                    f"Invalid message at index {index}."
-                )
-
-            # Only tool messages can carry tool_call_id.
-            if (
-                message.role != "tool"
-                and message.tool_call_id is not None
-            ):
-                raise ToolCallingProtocolError(
-                    f"Only tool messages can contain tool_call_id. "
-                    f"Invalid message at index {index}."
-                )
-
-            # A pending Tool Call batch must be completed before
-            # another non-tool message can appear.
-            if (
-                message.role != "tool"
-                and pending_tool_call_ids
-            ):
-                raise ToolCallingProtocolError(
-                    "Tool Call batch has unresolved results before "
-                    f"message at index {index}."
-                )
-
-            if message.role == "assistant":
-                for tool_call in message.tool_calls:
-                    ToolCallingService._validate_tool_call(
-                        tool_call
-                    )
-
-                    if tool_call.id in seen_tool_call_ids:
-                        raise ToolCallingProtocolError(
-                            f"Duplicate tool call ID in message history: "
-                            f"{tool_call.id!r}."
-                        )
-
-                    seen_tool_call_ids.add(tool_call.id)
-                    pending_tool_call_ids.add(tool_call.id)
-
-            elif message.role == "tool":
-                tool_call_id = message.tool_call_id
-
-                if (
-                    not isinstance(tool_call_id, str)
-                    or not tool_call_id.strip()
-                ):
-                    raise ToolCallingProtocolError(
-                        "Tool message must have a non-empty tool_call_id."
-                    )
-
-                if tool_call_id not in pending_tool_call_ids:
-                    raise ToolCallingProtocolError(
-                        f"Tool message references an unknown or already "
-                        f"resolved Tool Call ID: {tool_call_id!r}."
-                    )
-
-                pending_tool_call_ids.remove(tool_call_id)
-
-        if pending_tool_call_ids:
-            unresolved_ids = sorted(pending_tool_call_ids)
-
-            raise ToolCallingProtocolError(
-                "Message history contains unresolved Tool Calls: "
-                f"{unresolved_ids!r}."
-            )
-
-        return seen_tool_call_ids
+                str(exc)
+            ) from exc
 
     async def run(
         self,
         request: LLMRequest,
     ) -> LLMResponse:
-        """Run a multi-round tool-calling interaction.
+        """Run tool calling and return only the final LLM response.
+
+        This method preserves the original public interface.
+        """
+
+        execution = await self._run(request)
+        return execution.response
+
+    async def run_with_history(
+        self,
+        request: LLMRequest,
+        *,
+        on_iteration: Callable[[], None] | None = None,
+        before_llm_request: Callable[[], None] | None = None,
+        before_tool_dispatch: Callable[[int], None] | None = None,
+    ) -> ToolCallingExecution:
+        """Run tool calling and return the final response with full history.
+
+        Args:
+            request: The original LLM request.
+            on_iteration: Callback invoked after an LLM response is received.
+            before_llm_request: Callback invoked before each LLM request.
+            before_tool_dispatch: Callback invoked before each tool batch.
+
+        Returns:
+            ToolCallingExecution: The final response and complete history.
+
+        Raises:
+            TypeError: If a supplied callback is not callable.
+        """
+
+        callbacks = (
+            ("on_iteration", on_iteration),
+            ("before_llm_request", before_llm_request),
+            ("before_tool_dispatch", before_tool_dispatch),
+        )
+
+        for name, callback in callbacks:
+            if callback is not None and not callable(callback):
+                raise TypeError(f"{name} must be callable.")
+
+        return await self._run(
+            request,
+            on_iteration=on_iteration,
+            before_llm_request=before_llm_request,
+            before_tool_dispatch=before_tool_dispatch,
+        )
+
+    async def _run(
+        self,
+        request: LLMRequest,
+        *,
+        on_iteration: Callable[[], None] | None = None,
+        before_llm_request: Callable[[], None] | None = None,
+        before_tool_dispatch: Callable[[int], None] | None = None,
+    ) -> ToolCallingExecution:
+        """Execute a multi-round tool-calling interaction.
 
         max_rounds limits the number of tool-execution rounds.
         One additional LLM request is allowed for final synthesis
         after the last tool-execution round.
+
+        The returned message list is independent from the caller's
+        original list. Existing LLMMessage objects are not modified.
         """
 
         if not isinstance(request, LLMRequest):
@@ -263,6 +240,7 @@ class ToolCallingService:
         seen_tool_call_ids = self._validate_message_history(
             messages
         )
+
         # The registry is the source of truth for available tools.
         tool_definitions = self._registry.get_definitions()
 
@@ -273,7 +251,15 @@ class ToolCallingService:
                 tools=tool_definitions,
             )
 
+            # Check execution budget before sending the LLM request.
+            if before_llm_request is not None:
+                before_llm_request()
+
             response = await self._gateway.chat(llm_request)
+
+            # Record one completed LLM inference request.
+            if on_iteration is not None:
+                on_iteration()
 
             # Validate the complete response before processing it.
             self._validate_response(
@@ -283,7 +269,17 @@ class ToolCallingService:
 
             # No tool calls means the model has completed its response.
             if not response.tool_calls:
-                return response
+                messages.append(
+                    LLMMessage(
+                        role="assistant",
+                        content=response.content,
+                    )
+                )
+
+                return ToolCallingExecution(
+                    response=response,
+                    messages=messages,
+                )
 
             # Enforce the per-round tool-call limit before dispatch.
             if (
@@ -295,6 +291,10 @@ class ToolCallingService:
                     f"{round_index + 1} exceeds the configured limit "
                     f"of {self._config.max_tool_calls_per_round}."
                 )
+
+            # Reserve the entire tool-call batch before dispatch.
+            if before_tool_dispatch is not None:
+                before_tool_dispatch(len(response.tool_calls))
 
             # Preserve the assistant message containing tool calls.
             assistant_message = LLMMessage(
@@ -328,7 +328,15 @@ class ToolCallingService:
             tools=[],
         )
 
+        # Final synthesis also consumes one LLM iteration.
+        if before_llm_request is not None:
+            before_llm_request()
+
         final_response = await self._gateway.chat(final_request)
+
+        # Final synthesis is also an LLM inference iteration.
+        if on_iteration is not None:
+            on_iteration()
 
         # Final synthesis must also satisfy the response protocol.
         self._validate_response(
@@ -341,7 +349,18 @@ class ToolCallingService:
                 "Final synthesis response must not contain tool calls."
             )
 
-        return final_response
+        # Preserve the final assistant answer in the returned history.
+        messages.append(
+            LLMMessage(
+                role="assistant",
+                content=final_response.content,
+            )
+        )
+
+        return ToolCallingExecution(
+            response=final_response,
+            messages=messages,
+        )
 
     @staticmethod
     def _build_request(
@@ -352,7 +371,7 @@ class ToolCallingService:
         """Build a new request while preserving generation settings."""
 
         return LLMRequest(
-            messages=messages,
+            messages=list(messages),
             model=original_request.model,
             temperature=original_request.temperature,
             max_tokens=original_request.max_tokens,

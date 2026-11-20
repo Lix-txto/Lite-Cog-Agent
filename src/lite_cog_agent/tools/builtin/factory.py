@@ -14,6 +14,24 @@ from lite_cog_agent.profiling.service import ProfilingService
 from lite_cog_agent.statistics.service import StatisticalAnalysisService
 from lite_cog_agent.storage.file_manager import FileManager
 from lite_cog_agent.visualization.service import VisualizationService
+from lite_cog_agent.tools.base import BaseTool
+from lite_cog_agent.tools.builtin.analysis_tools import (
+    CorrelationAnalysisTool,
+    DatasetProfileTool,
+    DescriptiveAnalysisTool,
+    DistributionAnalysisTool,
+    FrequencyAnalysisTool,
+    GroupedAnalysisTool,
+)
+from lite_cog_agent.tools.builtin.cleaning_tools import (
+    DatasetCleaningTool,
+)
+from lite_cog_agent.tools.builtin.dataset_tools import (
+    DatasetLoadTool,
+)
+from lite_cog_agent.tools.builtin.visualization_tools import (
+    create_visualization_tools,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,3 +172,87 @@ def create_builtin_tool_services(
         cleaning=cleaning_service,
         file_manager=file_manager,
     )
+
+
+
+def create_builtin_tools(
+    services: BuiltinToolServices,
+    *,
+    dataset_root: Path | str,
+) -> tuple[BaseTool, ...]:
+    """Create all builtin tools using one shared service bundle.
+
+    All tools share the ExecutionContext and the service instances
+    provided by BuiltinToolServices.
+
+    Args:
+        services: Shared builtin service dependencies.
+        dataset_root: Allowed root directory for dataset loading.
+
+    Returns:
+        An immutable tuple containing all builtin tools.
+
+    Raises:
+        TypeError: If services or dataset_root has an invalid type.
+        RuntimeError: If the execution context has been closed.
+    """
+
+    if not isinstance(services, BuiltinToolServices):
+        raise TypeError(
+            "services must be a BuiltinToolServices instance"
+        )
+
+    if not isinstance(dataset_root, (Path, str)):
+        raise TypeError(
+            "dataset_root must be a Path or string"
+        )
+
+    context = services.context
+
+    if context.is_closed:
+        raise RuntimeError(
+            "Cannot create builtin tools for a closed ExecutionContext"
+        )
+
+    tools: tuple[BaseTool, ...] = (
+        DatasetLoadTool(
+            context=context,
+            loading_service=services.loading,
+            dataset_root=dataset_root,
+        ),
+        DatasetCleaningTool(
+            context=context,
+            cleaning_service=services.cleaning,
+        ),
+        DatasetProfileTool(
+            context=context,
+            profiling_service=services.profiling,
+        ),
+        DescriptiveAnalysisTool(
+            context=context,
+            statistics_service=services.statistics,
+        ),
+        FrequencyAnalysisTool(
+            context=context,
+            statistics_service=services.statistics,
+        ),
+        CorrelationAnalysisTool(
+            context=context,
+            statistics_service=services.statistics,
+        ),
+        GroupedAnalysisTool(
+            context=context,
+            statistics_service=services.statistics,
+        ),
+        DistributionAnalysisTool(
+            context=context,
+            statistics_service=services.statistics,
+        ),
+        *create_visualization_tools(
+            context=context,
+            visualization_service=services.visualization,
+            file_manager=services.file_manager,
+        ),
+    )
+
+    return tools

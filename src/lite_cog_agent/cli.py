@@ -10,25 +10,15 @@ from __future__ import annotations
 import asyncio
 
 from lite_cog_agent.config import settings
+from lite_cog_agent.core.agent_budget import (
+    AgentBudgetExceededError,
+)
+from lite_cog_agent.core.agent_factory import create_agent
+from lite_cog_agent.core.agent_loop import AgentLoopError
+from lite_cog_agent.core.agent_state import AgentStateError
+from lite_cog_agent.execution.context import ExecutionContext
 from lite_cog_agent.llm.exceptions import LLMError
 from lite_cog_agent.llm.gateway import LLMGateway
-from lite_cog_agent.llm.schemas import LLMMessage, LLMRequest
-
-
-SYSTEM_PROMPT = """
-You are Lite-Cog-Agent, a lightweight data analysis assistant.
-
-Your responsibilities:
-1. Help users understand and analyze structured data.
-2. Explain data analysis concepts clearly.
-3. Suggest practical Python and pandas solutions.
-4. Answer in the same language as the user.
-5. Do not claim to have analyzed files unless data was actually provided
-   and processed by an available tool.
-
-At this stage, you are operating in text-only mode.
-You cannot directly read files or execute Python code.
-""".strip()
 
 
 def print_banner() -> None:
@@ -55,34 +45,58 @@ def print_help() -> None:
     print("  status     Show application status")
     print("  usage      Show accumulated token usage")
     print("  reset      Reset token usage statistics")
+    print("  clear      Clear conversation history")
     print("  exit       Exit the application")
     print("  quit       Exit the application")
     print()
-    print("Any other input will be sent to the LLM.")
+    print("Any other input will be sent to the Agent.")
     print()
-
-
-def print_status(gateway: LLMGateway, connected: bool) -> None:
-    """Display application and LLM status."""
-
-    summary = gateway.usage_summary
-
     print()
-    print("Application Status")
-    print("-" * 40)
-    print("  Application  : Lite-Cog-Agent")
-    print("  Version      : 0.1.0")
-    print(f"  LLM Provider : {settings.LLM_PROVIDER}")
-    print(f"  LLM Model    : {settings.DEEPSEEK_MODEL}")
+    print("Data analysis examples:")
+    print("  Analyze sales.csv")
+    print("  Analyze the distribution of sales in sales.csv")
+    print("  Remove rows with missing values in users.csv")
+    print("  Calculate average age and score in users.csv")
+    print("  Generate a histogram of the age column")
+    print()
+    print("Dataset files must be placed under the data/ directory.")
+
+
+
+def print_status(
+    gateway: LLMGateway,
+    connected: bool,
+    *,
+    agent=None,
+    context=None,
+) -> None:
+    """Print current CLI and Agent runtime status."""
+
+    print("\n========== Agent Status ==========")
+
+    print("Application: Lite-Cog-Agent")
+    print(f"Provider: {settings.LLM_PROVIDER}")
+    print(f"Model: {settings.DEEPSEEK_MODEL}")
 
     if connected:
-        llm_status = "Connected (request succeeded)"
+        print("LLM Status: Connected (request succeeded)")
     else:
-        llm_status = "Configured (not tested yet)"
+        print("LLM Status: Not connected yet")
 
-    print(f"  LLM Status   : {llm_status}")
-    print(f"  Requests     : {summary.request_count}")
-    print()
+    if agent is not None:
+        print(f"Session ID: {agent.session_id}")
+
+    if context is not None:
+        print(
+            f"Loaded Datasets: {len(context.dataset_ids)}"
+        )
+
+    print(
+        f"LLM Requests: {gateway.usage_summary.request_count}"
+    )
+
+    print("==================================")
+
 
 
 def print_usage(gateway: LLMGateway) -> None:
@@ -123,54 +137,84 @@ def print_response(response) -> None:
     print("-" * 40)
     print()
 
-
-async def send_message(
-    gateway: LLMGateway,
-    user_input: str,
-):
-    """Send a single user message through the LLM Gateway."""
-
-    request = LLMRequest(
-        messages=[
-            LLMMessage(
-                role="system",
-                content=SYSTEM_PROMPT,
-            ),
-            LLMMessage(
-                role="user",
-                content=user_input,
-            ),
-        ],
-        temperature=0.7,
-        max_tokens=1024,
-    )
-
-    return await gateway.chat(request)
-
-
 async def run_interactive() -> None:
-    """Run the asynchronous interactive CLI."""
+    """Run the interactive Agent CLI session."""
 
     print_banner()
 
     connected = False
 
+    # Ensure runtime directories exist.
+    dataset_root = settings.DATA_DIR
+    artifact_root = (
+        settings.DATA_DIR
+        / "artifacts"
+        / "visualizations"
+    )
+
+    dataset_root.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    artifact_root.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    # One Gateway and one ExecutionContext per CLI session.
     async with LLMGateway() as gateway:
-        while True:
-            try:
-                user_input = input("lite-cog-agent> ").strip()
+        context = ExecutionContext()
+
+        try:
+            # Compose the complete Agent runtime.
+            agent = create_agent(
+                gateway,
+                context=context,
+                dataset_root=dataset_root,
+                artifact_root=artifact_root,
+            )
+
+            print(
+                "\nAgent initialized successfully."
+            )
+            print(
+                f"Session ID: {agent.session_id}"
+            )
+            print(
+                f"Dataset directory: {dataset_root}"
+            )
+
+            while True:
+                try:
+                    user_input = input(
+                        "\nYou: "
+                    ).strip()
+
+                except EOFError:
+                    print("\nInput stream closed.")
+                    break
 
                 if not user_input:
                     continue
 
                 command = user_input.lower()
 
+                if command in {"exit", "quit"}:
+                    print("Goodbye!")
+                    break
+
                 if command == "help":
                     print_help()
                     continue
 
                 if command == "status":
-                    print_status(gateway, connected)
+                    print_status(
+                        gateway,
+                        connected,
+                        agent=agent,
+                        context=context,
+                    )
                     continue
 
                 if command == "usage":
@@ -179,38 +223,66 @@ async def run_interactive() -> None:
 
                 if command == "reset":
                     gateway.reset_usage()
-                    print("\nToken usage statistics have been reset.\n")
+                    print(
+                        "LLM usage statistics reset."
+                    )
                     continue
 
-                if command in {"exit", "quit"}:
-                    print("\nShutting down Lite-Cog-Agent...")
-                    print("Goodbye!")
-                    break
+                if command == "clear":
+                    try:
+                        agent.reset()
+                        print(
+                            "Conversation history cleared."
+                        )
+                        print(
+                            "Loaded datasets and artifacts "
+                            "have been preserved."
+                        )
+                    except AgentStateError as exc:
+                        print(f"Unable to clear session: {exc}")
 
-                print("\nThinking...")
+                    continue
 
+                # All ordinary input goes through Agent.
                 try:
-                    response = await send_message(
-                        gateway,
-                        user_input,
+                    response = await agent.run(
+                        user_input
                     )
 
                     connected = True
                     print_response(response)
 
+                except AgentBudgetExceededError as exc:
+                    print(
+                        f"\nAgent budget exceeded: {exc}"
+                    )
+
                 except LLMError as exc:
-                    print("\nLLM request failed.")
-                    print(f"Error type: {type(exc).__name__}")
-                    print(f"Error: {exc}")
-                    print()
+                    print(
+                        f"\nLLM request failed: {exc}"
+                    )
 
-            except KeyboardInterrupt:
-                print("\n\nReceived interrupt signal. Exiting...")
-                break
+                except (
+                    AgentLoopError,
+                    AgentStateError,
+                ) as exc:
+                    print(
+                        f"\nAgent execution failed: {exc}"
+                    )
 
-            except EOFError:
-                print("\n\nInput stream closed. Exiting...")
-                break
+                except Exception as exc:
+                    print(
+                        "\nUnexpected error during "
+                        f"Agent execution: {exc}"
+                    )
+
+        except KeyboardInterrupt:
+            print("\nInterrupted by user.")
+
+        finally:
+            # ExecutionContext owns the in-memory datasets.
+            # Close it when the interactive session ends.
+            context.close()
 
 
 def main() -> int:

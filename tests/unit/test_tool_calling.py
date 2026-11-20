@@ -4,6 +4,7 @@ import pytest
 
 from lite_cog_agent.core.tool_calling import (
     ToolCallingError,
+    ToolCallingExecution,
     ToolCallingLimitError,
     ToolCallingProtocolError,
     ToolCallingService,
@@ -920,3 +921,400 @@ async def test_run_accepts_valid_multi_tool_message_history() -> None:
     assert result is response
     assert chat.await_count == 1
     dispatcher.dispatch_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_run_with_history_returns_final_assistant_message() -> None:
+    """A normal response is included in the returned conversation history."""
+
+    response = LLMResponse(
+        content="The analysis is complete.",
+    )
+
+    service, chat, _, dispatcher = make_service([response])
+    request = make_request()
+
+    execution = await service.run_with_history(request)
+
+    assert isinstance(execution, ToolCallingExecution)
+    assert execution.response is response
+
+    assert len(execution.messages) == 2
+    assert execution.messages[0] is request.messages[0]
+
+    final_message = execution.messages[-1]
+    assert final_message.role == "assistant"
+    assert final_message.content == "The analysis is complete."
+    assert final_message.tool_calls == []
+
+    chat.assert_awaited_once()
+    dispatcher.dispatch_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_run_with_history_preserves_tool_call_and_result_messages() -> None:
+    """Tool calls and their results are retained in execution history."""
+
+    tool_call = make_tool_call()
+
+    final_response = LLMResponse(
+        content="The file inspection is complete.",
+    )
+
+    service, chat, _, dispatcher = make_service(
+        [
+            LLMResponse(
+                content="I will inspect the file.",
+                tool_calls=[tool_call],
+            ),
+            final_response,
+        ]
+    )
+
+    request = make_request()
+
+    execution = await service.run_with_history(request)
+
+    assert execution.response is final_response
+
+    assert [message.role for message in execution.messages] == [
+        "user",
+        "assistant",
+        "tool",
+        "assistant",
+    ]
+
+    assistant_tool_message = execution.messages[1]
+
+    assert assistant_tool_message.content == "I will inspect the file."
+    assert len(assistant_tool_message.tool_calls) == 1
+    assert assistant_tool_message.tool_calls[0].id == "call_001"
+
+    tool_message = execution.messages[2]
+
+    assert tool_message.tool_call_id == "call_001"
+    assert tool_message.content is not None
+
+    final_message = execution.messages[3]
+
+    assert final_message.role == "assistant"
+    assert final_message.content == "The file inspection is complete."
+
+    assert chat.await_count == 2
+    dispatcher.dispatch_many.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_run_with_history_preserves_final_synthesis_message() -> None:
+    """Final synthesis is included after the maximum tool rounds."""
+
+    final_response = LLMResponse(
+        content="The final result is 42.",
+    )
+
+    service, chat, _, dispatcher = make_service(
+        [
+            LLMResponse(
+                tool_calls=[
+                    make_tool_call(),
+                ]
+            ),
+            final_response,
+        ],
+        config=ToolCallingConfig(max_rounds=1),
+    )
+
+    execution = await service.run_with_history(make_request())
+
+    assert execution.response is final_response
+
+    assert [message.role for message in execution.messages] == [
+        "user",
+        "assistant",
+        "tool",
+        "assistant",
+    ]
+
+    assert execution.messages[-1].content == "The final result is 42."
+
+    # The final synthesis request must not expose tools.
+    final_request = chat.await_args_list[-1].args[0]
+    assert final_request.tools == []
+
+    dispatcher.dispatch_many.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_run_with_history_does_not_modify_original_request_messages() -> None:
+    """Returning execution history does not mutate the original request."""
+
+    request = make_request()
+    original_messages = list(request.messages)
+
+    service, _, _, _ = make_service(
+        [
+            LLMResponse(content="Completed."),
+        ]
+    )
+
+    execution = await service.run_with_history(request)
+
+    assert request.messages == original_messages
+    assert request.messages is not execution.messages
+
+    assert len(request.messages) == 1
+    assert len(execution.messages) == 2
+
+    # Existing message objects are shared but never modified.
+    assert execution.messages[0] is request.messages[0]
+
+
+@pytest.mark.asyncio
+async def test_run_with_history_invokes_iteration_callback_once():
+    response = LLMResponse(
+        content="Analysis completed.",
+    )
+
+    service, chat, _, _ = make_service([response])
+
+    callback = MagicMock()
+
+    execution = await service.run_with_history(
+        make_request(),
+        on_iteration=callback,
+    )
+
+    assert execution.response is response
+    assert chat.await_count == 1
+    assert callback.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_run_with_history_counts_each_llm_response():
+    first_call = make_tool_call(
+        call_id="call_001",
+    )
+
+    second_call = make_tool_call(
+        call_id="call_002",
+    )
+
+    responses = [
+        LLMResponse(
+            tool_calls=[first_call],
+        ),
+        LLMResponse(
+            tool_calls=[second_call],
+        ),
+        LLMResponse(
+            content="Final synthesis.",
+        ),
+    ]
+
+    service, chat, _, dispatcher = make_service(
+        responses,
+        config=ToolCallingConfig(max_rounds=2),
+    )
+
+    callback = MagicMock()
+
+    execution = await service.run_with_history(
+        make_request(),
+        on_iteration=callback,
+    )
+
+    assert execution.response.content == "Final synthesis."
+    assert chat.await_count == 3
+    assert dispatcher.dispatch_many.await_count == 2
+    assert callback.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_run_with_history_does_not_invoke_callback_when_llm_fails():
+    service, chat, _, _ = make_service([])
+
+    chat.side_effect = RuntimeError(
+        "LLM provider unavailable."
+    )
+
+    callback = MagicMock()
+
+    with pytest.raises(
+        RuntimeError,
+        match="LLM provider unavailable",
+    ):
+        await service.run_with_history(
+            make_request(),
+            on_iteration=callback,
+        )
+
+    callback.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_run_with_history_supports_missing_iteration_callback():
+    response = LLMResponse(
+        content="Analysis completed.",
+    )
+
+    service, _, _, _ = make_service([response])
+
+    execution = await service.run_with_history(
+        make_request()
+    )
+
+    assert execution.response is response
+
+
+
+@pytest.mark.asyncio
+async def test_before_llm_request_callback_blocks_gateway_call():
+    """Budget callback must run before the LLM Gateway."""
+
+    service, chat, _, dispatcher = make_service(
+        [
+            LLMResponse(content="Analysis completed."),
+        ]
+    )
+
+    callback = MagicMock(
+        side_effect=RuntimeError("Iteration budget exceeded.")
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="Iteration budget exceeded",
+    ):
+        await service.run_with_history(
+            make_request(),
+            before_llm_request=callback,
+        )
+
+    callback.assert_called_once()
+    chat.assert_not_awaited()
+    dispatcher.dispatch_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_before_tool_dispatch_callback_blocks_dispatcher():
+    """An exhausted tool budget must prevent the entire batch."""
+
+    tool_calls = [
+        make_tool_call(call_id="call_001"),
+        make_tool_call(call_id="call_002"),
+    ]
+
+    response = LLMResponse(
+        content="Run analysis tools.",
+        tool_calls=tool_calls,
+    )
+
+    service, chat, _, dispatcher = make_service(
+        [response]
+    )
+
+    callback = MagicMock(
+        side_effect=RuntimeError("Tool-call budget exceeded.")
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="Tool-call budget exceeded",
+    ):
+        await service.run_with_history(
+            make_request(),
+            before_tool_dispatch=callback,
+        )
+
+    callback.assert_called_once_with(2)
+    chat.assert_awaited_once()
+    dispatcher.dispatch_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_before_tool_dispatch_callback_allows_dispatch():
+    """A successful budget reservation must allow dispatch."""
+
+    tool_call = make_tool_call()
+
+    responses = [
+        LLMResponse(
+            content="Run the analysis tool.",
+            tool_calls=[tool_call],
+        ),
+        LLMResponse(
+            content="Analysis completed.",
+        ),
+    ]
+
+    service, chat, _, dispatcher = make_service(
+        responses
+    )
+
+    callback = MagicMock()
+
+    execution = await service.run_with_history(
+        make_request(),
+        before_tool_dispatch=callback,
+    )
+
+    assert execution.response.content == "Analysis completed."
+
+    callback.assert_called_once_with(1)
+    assert chat.await_count == 2
+
+    dispatcher.dispatch_many.assert_awaited_once_with(
+        [tool_call]
+    )
+
+
+@pytest.mark.asyncio
+async def test_before_llm_request_callback_blocks_final_synthesis():
+    """Final synthesis must also consume the LLM iteration budget."""
+
+    tool_call = make_tool_call()
+
+    responses = [
+        LLMResponse(
+            content="Run the analysis tool.",
+            tool_calls=[tool_call],
+        ),
+        LLMResponse(
+            content="Final synthesis.",
+        ),
+    ]
+
+    service, chat, _, dispatcher = make_service(
+        responses,
+        config=ToolCallingConfig(max_rounds=1),
+    )
+
+    callback_count = 0
+
+    def before_llm_request():
+        nonlocal callback_count
+
+        callback_count += 1
+
+        if callback_count > 1:
+            raise RuntimeError("Iteration budget exceeded.")
+
+    with pytest.raises(
+        RuntimeError,
+        match="Iteration budget exceeded",
+    ):
+        await service.run_with_history(
+            make_request(),
+            before_llm_request=before_llm_request,
+        )
+
+    assert callback_count == 2
+
+    # The first LLM request was allowed.
+    # The second request (final synthesis) was blocked.
+    chat.assert_awaited_once()
+
+    # The first tool batch was dispatched successfully.
+    dispatcher.dispatch_many.assert_awaited_once_with(
+        [tool_call]
+    )

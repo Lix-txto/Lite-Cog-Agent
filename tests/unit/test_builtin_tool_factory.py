@@ -14,7 +14,6 @@ from lite_cog_agent.tools.builtin import (
     create_builtin_tools,
 )
 
-
 EXPECTED_TOOL_NAMES = (
     "dataset.load",
     "dataset.clean",
@@ -23,6 +22,7 @@ EXPECTED_TOOL_NAMES = (
     "analysis.frequency",
     "analysis.correlation",
     "analysis.grouped",
+    "analysis.derived_metric",
     "analysis.distribution",
     "visualization.bar",
     "visualization.grouped_bar",
@@ -60,7 +60,7 @@ def test_factory_creates_all_builtin_tools(
     )
 
     assert isinstance(tools, tuple)
-    assert len(tools) == 15
+    assert len(tools) == 16
 
     assert all(
         isinstance(tool, BaseTool)
@@ -128,6 +128,10 @@ def test_factory_reuses_shared_services(
 
     assert (
         by_name["analysis.descriptive"]._statistics_service
+        is services.statistics
+    )
+    assert (
+        by_name["analysis.derived_metric"]._statistics_service
         is services.statistics
     )
 

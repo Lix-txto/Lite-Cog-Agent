@@ -108,6 +108,10 @@ PYTHON_MAX_OUTPUT_SIZE = get_positive_int_env(
 # Storage configuration
 # ---------------------------------------------------------
 
+DATASET_MAX_ROWS = get_positive_int_env(
+    "DATASET_MAX_ROWS", 100_000
+)
+
 DATA_DIR = resolve_project_path(
     Path(get_env("DATA_DIR", "./data"))
 )

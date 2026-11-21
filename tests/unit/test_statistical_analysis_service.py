@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import pandas as pd
 import pytest
@@ -32,11 +32,13 @@ from lite_cog_agent.statistics import (
     StatisticalExecutionError,
     StatisticalValidationError,
 )
-from lite_cog_agent.statistics.grouped import GroupedAnalyzer
-from lite_cog_agent.statistics.service import (
-    StatisticalAnalysisService as ServiceImplementation,
+from lite_cog_agent.statistics.contracts import (
+    DerivedMetricAnalysisResult,
 )
-
+from lite_cog_agent.statistics.derived_metric import DerivedMetricAnalyzer
+from lite_cog_agent.statistics.exceptions import (
+    DerivedMetricAnalysisError,
+)
 
 # ---------------------------------------------------------------------------
 # Fixtures and helpers
@@ -158,6 +160,7 @@ class TestStatisticalAnalysisServiceInitialization:
         assert isinstance(service._correlation_analyzer, CorrelationAnalyzer)
         assert isinstance(service._grouped_analyzer, GroupedAnalyzer)
         assert isinstance(service._distribution_analyzer, DistributionAnalyzer)
+        assert isinstance(service._derived_metric_analyzer, DerivedMetricAnalyzer,)
 
     def test_supports_analyzer_dependency_injection(self):
         analyzers = {
@@ -166,6 +169,7 @@ class TestStatisticalAnalysisServiceInitialization:
             "correlation_analyzer": StubAnalyzer(),
             "grouped_analyzer": StubAnalyzer(),
             "distribution_analyzer": StubAnalyzer(),
+            "derived_metric_analyzer": StubAnalyzer(),
         }
 
         service = StatisticalAnalysisService(**analyzers)
@@ -175,6 +179,7 @@ class TestStatisticalAnalysisServiceInitialization:
         assert service._correlation_analyzer is analyzers["correlation_analyzer"]
         assert service._grouped_analyzer is analyzers["grouped_analyzer"]
         assert service._distribution_analyzer is analyzers["distribution_analyzer"]
+        assert service._derived_metric_analyzer is analyzers["derived_metric_analyzer"]
 
 
 # ---------------------------------------------------------------------------
@@ -608,6 +613,222 @@ class TestGroupedAnalysis:
         with pytest.raises(TypeError):
             result.records[0]["salary_mean"] = 9999.0
 
+# ---------------------------------------------------------------------------
+# Derived metric analysis
+# ---------------------------------------------------------------------------
+
+class TestDerivedMetricAnalysis:
+    def test_assembles_ungrouped_result(self, dataset_context):
+        context, reference = dataset_context
+
+        analyzer = StubAnalyzer(
+            result=(
+                {
+                    "valid_row_count": 4,
+                    "result": 29000.0,
+                },
+            )
+        )
+        service = StatisticalAnalysisService(
+            derived_metric_analyzer=analyzer,
+        )
+
+        result = service.analyze_derived_metric(
+            context,
+            reference.dataset_id,
+            left_column="age",
+            right_column="salary",
+        )
+
+        assert isinstance(result, DerivedMetricAnalysisResult)
+        assert result.dataset_id == reference.dataset_id
+        assert result.dataset_name == reference.name
+        assert result.row_count == 4
+        assert result.valid_row_count == 4
+        assert result.excluded_row_count == 0
+        assert result.left_column == "age"
+        assert result.right_column == "salary"
+        assert result.operator == "multiply"
+        assert result.aggregation == "sum"
+        assert result.group_by == ()
+        assert result.records[0]["valid_row_count"] == 4
+        assert result.records[0]["result"] == 29000.0
+
+        assert analyzer.calls[0][1] == {
+            "left_column": "age",
+            "right_column": "salary",
+            "operator": "multiply",
+            "aggregation": "sum",
+            "group_by": (),
+            "dropna": True,
+        }
+
+    def test_assembles_grouped_result(self, dataset_context):
+        context, reference = dataset_context
+
+        analyzer = StubAnalyzer(
+            result=(
+                {
+                    "department": "A",
+                    "valid_row_count": 2,
+                    "result": 275000.0,
+                },
+                {
+                    "department": "B",
+                    "valid_row_count": 2,
+                    "result": 660000.0,
+                },
+            )
+        )
+        service = StatisticalAnalysisService(
+            derived_metric_analyzer=analyzer,
+        )
+
+        result = service.analyze_derived_metric(
+            context,
+            reference.dataset_id,
+            left_column="age",
+            right_column="salary",
+            group_by=["department"],
+            dropna=False,
+        )
+
+        assert result.group_by == ("department",)
+        assert result.row_count == 4
+        assert result.valid_row_count == 4
+        assert result.excluded_row_count == 0
+        assert len(result.records) == 2
+
+        assert analyzer.calls[0][1] == {
+            "left_column": "age",
+            "right_column": "salary",
+            "operator": "multiply",
+            "aggregation": "sum",
+            "group_by": ["department"],
+            "dropna": False,
+        }
+
+    def test_counts_missing_group_keys_as_excluded_rows(self):
+        dataframe = pd.DataFrame(
+            {
+                "group": ["A", None, "B", None],
+                "left": [2.0, 3.0, 4.0, 5.0],
+                "right": [10.0, 10.0, 10.0, 10.0],
+            }
+        )
+        context, reference = make_context(dataframe)
+
+        analyzer = StubAnalyzer(
+            result=(
+                {
+                    "group": "A",
+                    "valid_row_count": 1,
+                    "result": 20.0,
+                },
+                {
+                    "group": "B",
+                    "valid_row_count": 1,
+                    "result": 40.0,
+                },
+            )
+        )
+        service = StatisticalAnalysisService(
+            derived_metric_analyzer=analyzer,
+        )
+
+        result = service.analyze_derived_metric(
+            context,
+            reference.dataset_id,
+            left_column="left",
+            right_column="right",
+            group_by=["group"],
+            dropna=True,
+        )
+
+        assert result.row_count == 4
+        assert result.valid_row_count == 2
+        assert result.excluded_row_count == 2
+        assert sum(
+            record["valid_row_count"]
+            for record in result.records
+        ) == result.valid_row_count
+
+    def test_preserves_zero_valid_row_result(self, dataset_context):
+        context, reference = dataset_context
+
+        analyzer = StubAnalyzer(
+            result=(
+                {
+                    "valid_row_count": 0,
+                    "result": None,
+                },
+            )
+        )
+        service = StatisticalAnalysisService(
+            derived_metric_analyzer=analyzer,
+        )
+
+        result = service.analyze_derived_metric(
+            context,
+            reference.dataset_id,
+            left_column="age",
+            right_column="salary",
+        )
+
+        assert result.row_count == 4
+        assert result.valid_row_count == 0
+        assert result.excluded_row_count == 4
+        assert result.records[0]["result"] is None
+
+    def test_wraps_analyzer_execution_error(self, dataset_context):
+        context, reference = dataset_context
+
+        analyzer = StubAnalyzer(
+            error=DerivedMetricAnalysisError(
+                "simulated derived metric failure"
+            )
+        )
+        service = StatisticalAnalysisService(
+            derived_metric_analyzer=analyzer,
+        )
+
+        with pytest.raises(
+            StatisticalExecutionError,
+            match="derived_metric analysis failed",
+        ):
+            service.analyze_derived_metric(
+                context,
+                reference.dataset_id,
+                left_column="age",
+                right_column="salary",
+            )
+
+    def test_wraps_invalid_result_contract(self, dataset_context):
+        context, reference = dataset_context
+
+        analyzer = StubAnalyzer(
+            result=(
+                {
+                    "valid_row_count": 4,
+                    # Deliberately missing "result".
+                },
+            )
+        )
+        service = StatisticalAnalysisService(
+            derived_metric_analyzer=analyzer,
+        )
+
+        with pytest.raises(
+            StatisticalExecutionError,
+            match="Failed to assemble derived_metric analysis result",
+        ):
+            service.analyze_derived_metric(
+                context,
+                reference.dataset_id,
+                left_column="age",
+                right_column="salary",
+            )
+
 
 # ---------------------------------------------------------------------------
 # Distribution analysis
@@ -958,15 +1179,14 @@ class TestResultAssembly:
         with patch(
             "lite_cog_agent.statistics.service.DescriptiveStatisticsResult",
             side_effect=ValueError("invalid result"),
-        ):
-            with pytest.raises(
-                StatisticalExecutionError,
-                match="Failed to assemble descriptive analysis result",
-            ) as exc_info:
-                service.analyze_descriptive(
-                    context,
-                    reference.dataset_id,
-                )
+        ), pytest.raises(
+            StatisticalExecutionError,
+            match="Failed to assemble descriptive analysis result",
+        ) as exc_info:
+            service.analyze_descriptive(
+                context,
+                reference.dataset_id,
+            )
 
         assert isinstance(exc_info.value.__cause__, ValueError)
 

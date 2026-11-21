@@ -24,7 +24,6 @@ from lite_cog_agent.tools.dispatcher import ToolDispatcher
 from lite_cog_agent.tools.execution_config import ToolExecutionConfig
 from lite_cog_agent.tools.registry import ToolRegistry
 
-
 EXPECTED_TOOL_NAMES = (
     "dataset.load",
     "dataset.clean",
@@ -33,6 +32,7 @@ EXPECTED_TOOL_NAMES = (
     "analysis.frequency",
     "analysis.correlation",
     "analysis.grouped",
+    "analysis.derived_metric",
     "analysis.distribution",
     "visualization.bar",
     "visualization.grouped_bar",
@@ -121,7 +121,7 @@ def test_factory_creates_all_builtin_tools(
     registry = tool_calling_service._registry
 
     assert isinstance(registry, ToolRegistry)
-    assert len(registry) == 15
+    assert len(registry) == 16
 
     assert tuple(
         tool.name for tool in registry.list_tools()

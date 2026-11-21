@@ -4,27 +4,28 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+
 from lite_cog_agent.core.messages import (
     MessageHistoryError,
     validate_message_history,
+)
+from lite_cog_agent.core.tool_calling_config import (
+    ToolCallingConfig,
 )
 from lite_cog_agent.llm.gateway import LLMGateway
 from lite_cog_agent.llm.schemas import (
     LLMMessage,
     LLMRequest,
     LLMResponse,
-    ToolDefinition,
     ToolCall,
+    ToolDefinition,
 )
 from lite_cog_agent.tools.dispatcher import ToolDispatcher
 from lite_cog_agent.tools.message_converter import (
     convert_tool_results_to_messages,
 )
 from lite_cog_agent.tools.registry import ToolRegistry
-
-from lite_cog_agent.core.tool_calling_config import (
-    ToolCallingConfig,
-)
+from lite_cog_agent.tools.schemas import ToolResult
 
 
 class ToolCallingError(Exception):
@@ -281,16 +282,46 @@ class ToolCallingService:
                     messages=messages,
                 )
 
-            # Enforce the per-round tool-call limit before dispatch.
+            # Reject the entire batch when it exceeds the per-round limit.
+            # No tool in this batch is dispatched or charged to the tool budget.
             if (
                 len(response.tool_calls)
                 > self._config.max_tool_calls_per_round
             ):
-                raise ToolCallingLimitError(
-                    "The number of tool calls in round "
-                    f"{round_index + 1} exceeds the configured limit "
-                    f"of {self._config.max_tool_calls_per_round}."
+                assistant_message = LLMMessage(
+                    role="assistant",
+                    content=response.content,
+                    tool_calls=list(response.tool_calls),
                 )
+                messages.append(assistant_message)
+
+                rejected_results = [
+                    ToolResult.fail(
+                        error=(
+                            "Tool call batch rejected: "
+                            f"the configured limit is "
+                            f"{self._config.max_tool_calls_per_round}, "
+                            f"but the model requested "
+                            f"{len(response.tool_calls)} calls. "
+                            "No tools in this batch were executed. "
+                            "Please replan and issue fewer tool calls."
+                        ),
+                        metadata={
+                            "reason": "max_tool_calls_per_round_exceeded",
+                            "executed": False,
+                        },
+                    )
+                    for _ in response.tool_calls
+                ]
+
+                messages.extend(
+                    convert_tool_results_to_messages(
+                        response.tool_calls,
+                        rejected_results,
+                    )
+                )
+
+                continue
 
             # Reserve the entire tool-call batch before dispatch.
             if before_tool_dispatch is not None:

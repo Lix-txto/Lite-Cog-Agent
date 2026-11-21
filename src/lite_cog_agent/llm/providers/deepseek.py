@@ -19,6 +19,10 @@ from openai import (
 )
 
 from lite_cog_agent.config import settings
+from lite_cog_agent.llm.exceptions import (
+    LLMConfigurationError,
+    LLMProviderError,
+)
 from lite_cog_agent.llm.schemas import (
     LLMMessage,
     LLMRequest,
@@ -26,10 +30,6 @@ from lite_cog_agent.llm.schemas import (
     TokenUsage,
     ToolCall,
     ToolDefinition,
-)
-from lite_cog_agent.llm.exceptions import (
-    LLMConfigurationError,
-    LLMProviderError,
 )
 
 
@@ -39,6 +39,128 @@ class DeepSeekProviderError(LLMProviderError):
 
 class DeepSeekProvider:
     """Async provider adapter for the DeepSeek API."""
+
+
+    @staticmethod
+    def _encode_tool_name(name: str) -> str:
+        """
+        Encode an internal tool name into a DeepSeek-compatible name.
+
+        Encoding rules:
+        - ASCII letters, digits, and hyphens are preserved.
+        - Underscores are encoded as '_u'.
+        - Dots are encoded as '_d'.
+        - Other characters are encoded as '_xXXXXXX_'.
+        """
+
+        if not isinstance(name, str) or not name:
+            raise ValueError("Tool name must be a non-empty string.")
+
+        encoded_parts: list[str] = []
+
+        for char in name:
+            if char.isascii() and (
+                char.isalnum() or char == "-"
+            ):
+                encoded_parts.append(char)
+
+            elif char == "_":
+                encoded_parts.append("_u")
+
+            elif char == ".":
+                encoded_parts.append("_d")
+
+            else:
+                encoded_parts.append(f"_x{ord(char):06X}_")
+
+        return "lc_" + "".join(encoded_parts)
+
+    @staticmethod
+    def _decode_tool_name(name: str) -> str:
+        """
+        Decode a DeepSeek-compatible tool name into its internal name.
+
+        Invalid or malformed encoded names are rejected.
+        """
+
+        if not isinstance(name, str) or not name.startswith("lc_"):
+            raise ValueError("Invalid encoded tool name prefix.")
+
+        payload = name[3:]
+
+        if not payload:
+            raise ValueError("Encoded tool name cannot be empty.")
+
+        decoded_parts: list[str] = []
+        index = 0
+
+        while index < len(payload):
+            char = payload[index]
+
+            if char != "_":
+                if not (
+                    char.isascii()
+                    and (char.isalnum() or char == "-")
+                ):
+                    raise ValueError(
+                        f"Invalid character in encoded tool name: {char!r}"
+                    )
+
+                decoded_parts.append(char)
+                index += 1
+                continue
+
+            if payload.startswith("_u", index):
+                decoded_parts.append("_")
+                index += 2
+
+            elif payload.startswith("_d", index):
+                decoded_parts.append(".")
+                index += 2
+
+            elif payload.startswith("_x", index):
+                end_index = index + 9
+
+                if end_index > len(payload):
+                    raise ValueError(
+                        "Incomplete Unicode escape in tool name."
+                    )
+
+                escape = payload[index + 2:end_index - 1]
+
+                if (
+                    payload[end_index - 1] != "_"
+                    or len(escape) != 6
+                    or any(
+                        char not in "0123456789ABCDEF"
+                        for char in escape
+                    )
+                ):
+                    raise ValueError(
+                        "Invalid Unicode escape in tool name."
+                    )
+
+                codepoint = int(escape, 16)
+
+                if codepoint > 0x10FFFF:
+                    raise ValueError(
+                        "Unicode code point out of range in tool name."
+                    )
+
+                decoded_parts.append(chr(codepoint))
+                index = end_index
+
+            else:
+                raise ValueError(
+                    "Unknown escape sequence in encoded tool name."
+                )
+
+        decoded = "".join(decoded_parts)
+
+        if not decoded:
+            raise ValueError("Decoded tool name cannot be empty.")
+
+        return decoded
 
 
     def __init__(
@@ -103,7 +225,11 @@ class DeepSeekProvider:
                 item["content"] = message.content
 
             if message.name is not None:
-                item["name"] = message.name
+                item["name"] = (
+                    DeepSeekProvider._encode_tool_name(message.name)
+                    if message.role == "tool"
+                    else message.name
+                )
 
             if message.tool_call_id is not None:
                 item["tool_call_id"] = message.tool_call_id
@@ -114,7 +240,7 @@ class DeepSeekProvider:
                         "id": tool_call.id,
                         "type": "function",
                         "function": {
-                            "name": tool_call.name,
+                            "name": DeepSeekProvider._encode_tool_name(tool_call.name),
                             "arguments": json.dumps(
                                 tool_call.arguments,
                                 ensure_ascii=False,
@@ -138,7 +264,7 @@ class DeepSeekProvider:
             {
                 "type": "function",
                 "function": {
-                    "name": tool.name,
+                    "name":  DeepSeekProvider._encode_tool_name(tool.name),
                     "description": tool.description,
                     "parameters": tool.parameters,
                 },
@@ -175,10 +301,19 @@ class DeepSeekProvider:
                     "must be a JSON object."
                 )
 
+            try:
+                original_tool_name = DeepSeekProvider._decode_tool_name(
+                    item.function.name
+                )
+            except ValueError as exc:
+                raise DeepSeekProviderError(
+                    "DeepSeek returned an invalid encoded tool name."
+                ) from exc
+
             tool_calls.append(
                 ToolCall(
                     id=item.id,
-                    name=item.function.name,
+                    name=original_tool_name,
                     arguments=arguments,
                 )
             )

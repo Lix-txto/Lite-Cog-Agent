@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import json
 from collections import deque
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 
 from lite_cog_agent.core.tool_calling import (
-    ToolCallingLimitError,
     ToolCallingService,
 )
 from lite_cog_agent.core.tool_calling_config import ToolCallingConfig
@@ -76,7 +75,7 @@ class FakeProvider:
 class AddTool(BaseTool):
     name = "add"
     description = "Add two numbers."
-    parameters = {
+    parameters: ClassVar[dict[str, Any]] = {
         "type": "object",
         "properties": {
             "a": {"type": "number"},
@@ -95,7 +94,7 @@ class AddTool(BaseTool):
 class MultiplyTool(BaseTool):
     name = "multiply"
     description = "Multiply two numbers."
-    parameters = {
+    parameters: ClassVar[dict[str, Any]] = {
         "type": "object",
         "properties": {
             "a": {"type": "number"},
@@ -114,12 +113,11 @@ class MultiplyTool(BaseTool):
 class FailingTool(BaseTool):
     name = "fail"
     description = "A tool that returns an expected failure."
-    parameters = {
+    parameters: ClassVar[dict[str, Any]] = {
         "type": "object",
         "properties": {},
         "additionalProperties": False,
     }
-
     async def execute(self, arguments: dict[str, Any]) -> ToolResult:
         return ToolResult.fail("Intentional integration-test failure.")
 
@@ -379,11 +377,12 @@ async def test_tool_failure_is_returned_to_model_and_can_be_synthesized() -> Non
 
 
 @pytest.mark.asyncio
-async def test_tool_call_limit_rejects_oversized_batch() -> None:
-    """A batch exceeding the configured limit is rejected before dispatch."""
+async def test_tool_call_limit_rejects_batch_and_replans_end_to_end() -> None:
+    """An oversized batch is rejected, then a legal retry is executed."""
 
     service, provider, gateway = make_service(
         [
+            # Round 1: the model requests two calls, exceeding the limit.
             make_response(
                 tool_calls=[
                     ToolCall(
@@ -397,7 +396,19 @@ async def test_tool_call_limit_rejects_oversized_batch() -> None:
                         arguments={"a": 2, "b": 3},
                     ),
                 ]
-            )
+            ),
+            # Round 2: the model replans with one legal call.
+            make_response(
+                tool_calls=[
+                    ToolCall(
+                        id="retry_add",
+                        name="add",
+                        arguments={"a": 4, "b": 5},
+                    )
+                ]
+            ),
+            # Final synthesis.
+            make_response(content="The result is 9."),
         ],
         config=ToolCallingConfig(
             max_rounds=2,
@@ -405,11 +416,62 @@ async def test_tool_call_limit_rejects_oversized_batch() -> None:
         ),
     )
 
-    with pytest.raises(ToolCallingLimitError):
-        await service.run(make_request())
+    result = await service.run(make_request())
 
-    assert len(provider.requests) == 1
-    assert gateway.usage_summary.request_count == 1
+    assert result.content == "The result is 9."
+    assert len(provider.requests) == 3
+    assert gateway.usage_summary.request_count == 3
+
+    # The second provider request receives the rejected batch feedback.
+    retry_request = provider.requests[1]
+
+    rejected_assistant = retry_request.messages[1]
+    rejected_messages = retry_request.messages[2:4]
+
+    assert rejected_assistant.role == "assistant"
+    assert [
+        call.id for call in rejected_assistant.tool_calls
+    ] == [
+        "limit_add",
+        "limit_multiply",
+    ]
+
+    assert len(rejected_messages) == 2
+
+    for expected_id, tool_message in zip(
+        ["limit_add", "limit_multiply"],
+        rejected_messages,
+        strict=True,
+    ):
+        assert tool_message.role == "tool"
+        assert tool_message.tool_call_id == expected_id
+
+        payload = json.loads(tool_message.content)
+
+        assert payload["success"] is False
+        assert payload["metadata"]["reason"] == (
+            "max_tool_calls_per_round_exceeded"
+        )
+        assert payload["metadata"]["executed"] is False
+        assert "No tools in this batch were executed" in (
+            payload["error"]
+        )
+
+    # The third request contains the successful retry result.
+    final_request = provider.requests[2]
+
+    assert final_request.tools == []
+
+    retry_tool_message = final_request.messages[-1]
+
+    assert retry_tool_message.role == "tool"
+    assert retry_tool_message.tool_call_id == "retry_add"
+
+    retry_payload = json.loads(retry_tool_message.content)
+
+    assert retry_payload["success"] is True
+    assert retry_payload["output"]["result"] == 9
+    assert retry_payload["error"] is None
 
 
 @pytest.mark.asyncio

@@ -2,6 +2,7 @@
 
 from lite_cog_agent.statistics.contracts import (
     CorrelationAnalysisResult,
+    DerivedMetricAnalysisResult,
     DescriptiveStatistics,
     DescriptiveStatisticsResult,
     DistributionAnalysisResult,
@@ -11,6 +12,7 @@ from lite_cog_agent.statistics.contracts import (
     HistogramBin,
 )
 from lite_cog_agent.statistics.correlation import CorrelationAnalyzer
+from lite_cog_agent.statistics.derived_metric import DerivedMetricAnalyzer
 from lite_cog_agent.statistics.descriptive import DescriptiveAnalyzer
 from lite_cog_agent.statistics.distribution import (
     DistributionAnalysisData,
@@ -18,6 +20,7 @@ from lite_cog_agent.statistics.distribution import (
 )
 from lite_cog_agent.statistics.exceptions import (
     CorrelationAnalysisError,
+    DerivedMetricAnalysisError,
     DescriptiveAnalysisError,
     DistributionAnalysisError,
     FrequencyAnalysisError,
@@ -34,6 +37,9 @@ __all__ = [
     "CorrelationAnalysisError",
     "CorrelationAnalysisResult",
     "CorrelationAnalyzer",
+    "DerivedMetricAnalysisError",
+    "DerivedMetricAnalysisResult",
+    "DerivedMetricAnalyzer",
     "DescriptiveAnalysisError",
     "DescriptiveAnalyzer",
     "DescriptiveStatistics",

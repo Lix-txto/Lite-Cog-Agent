@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from copy import deepcopy
 
+from lite_cog_agent.core.agent_budget import (
+    AgentBudget,
+    AgentBudgetExceededError,
+)
 from lite_cog_agent.core.agent_state import AgentState
 from lite_cog_agent.core.messages import (
     MessageHistoryError,
@@ -18,10 +22,6 @@ from lite_cog_agent.llm.schemas import (
     LLMMessage,
     LLMRequest,
     LLMResponse,
-)
-from lite_cog_agent.core.agent_budget import (
-    AgentBudget,
-    AgentBudgetExceededError,
 )
 
 
@@ -81,6 +81,11 @@ class AgentLoop:
         """Return the current session identifier."""
 
         return self._state.session_id
+
+    def get_messages(self) -> list[LLMMessage]:
+        """Return a deep copy of the current conversation history."""
+
+        return self._state.message_manager.get_messages()
 
     async def run(self, user_input: str) -> LLMResponse:
         """Execute one user request.

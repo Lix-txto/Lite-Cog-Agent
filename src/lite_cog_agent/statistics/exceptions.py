@@ -25,6 +25,10 @@ class GroupedAnalysisError(StatisticalAnalysisException):
     """Raised when grouped analysis fails."""
 
 
+class DerivedMetricAnalysisError(StatisticalAnalysisException):
+    """Raised when derived metric analysis fails."""
+
+
 class DistributionAnalysisError(StatisticalAnalysisException):
     """Raised when distribution analysis fails."""
 

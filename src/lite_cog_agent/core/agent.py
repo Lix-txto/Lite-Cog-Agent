@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from lite_cog_agent.core.agent_loop import AgentLoop
-from lite_cog_agent.llm.schemas import LLMResponse
+from lite_cog_agent.llm.schemas import LLMMessage, LLMResponse
 
 
 class Agent:
@@ -22,6 +22,9 @@ class Agent:
         ):
             raise TypeError("loop must expose a string session_id.")
 
+        if not callable(getattr(loop, "get_messages", None)):
+            raise TypeError("loop must provide get_messages().")
+
         self._loop = loop
 
     @property
@@ -29,6 +32,11 @@ class Agent:
         """Return the current session identifier."""
 
         return self._loop.session_id
+
+    def get_messages(self) -> list[LLMMessage]:
+        """Return a copy of the current conversation history."""
+
+        return self._loop.get_messages()
 
     async def run(self, user_input: str) -> LLMResponse:
         """Submit a user request and return the final LLM response."""

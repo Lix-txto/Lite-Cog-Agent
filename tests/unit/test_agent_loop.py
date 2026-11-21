@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import pytest
 
+from lite_cog_agent.core.agent_budget import AgentBudget, AgentBudgetExceededError
 from lite_cog_agent.core.agent_loop import (
     AgentLoop,
     AgentLoopError,
 )
-from lite_cog_agent.core.agent_budget import AgentBudget, AgentBudgetExceededError
 from lite_cog_agent.core.agent_state import (
     AgentState,
     AgentStateError,
@@ -21,7 +21,6 @@ from lite_cog_agent.llm.schemas import (
     LLMResponse,
     ToolCall,
 )
-
 
 
 class FakeToolCallingService:
@@ -582,7 +581,7 @@ async def test_agent_budget_counters_reset_for_next_request():
         tool_call_batches=[1],
     )
 
-    loop, state, manager, service = create_loop(
+    loop, state, _manager, service = create_loop(
         service=service,
         budget=AgentBudget(
             max_iterations=1,
@@ -600,3 +599,35 @@ async def test_agent_budget_counters_reset_for_next_request():
     assert state.tool_call_count == 1
     assert state.is_running is False
     assert len(service.requests) == 2
+
+
+def test_get_messages_returns_empty_history_initially():
+    loop, _, _, _ = create_loop()
+
+    assert loop.get_messages() == []
+
+
+@pytest.mark.asyncio
+async def test_get_messages_returns_isolated_history_copy():
+    loop, _, manager, _ = create_loop()
+
+    await loop.run("分析销售数据。")
+
+    messages = loop.get_messages()
+
+    assert messages == manager.get_messages()
+    assert len(messages) == 3
+
+    # 修改返回值不能污染 AgentLoop 内部历史。
+    messages[1].content = "被外部修改的内容"
+    messages.append(
+        LLMMessage(
+            role="user",
+            content="额外消息",
+        )
+    )
+
+    internal_messages = loop.get_messages()
+
+    assert len(internal_messages) == 3
+    assert internal_messages[1].content == "分析销售数据。"

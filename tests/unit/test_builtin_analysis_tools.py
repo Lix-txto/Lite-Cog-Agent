@@ -16,6 +16,7 @@ from lite_cog_agent.statistics.service import StatisticalAnalysisService
 from lite_cog_agent.tools.builtin.analysis_tools import (
     CorrelationAnalysisTool,
     DatasetProfileTool,
+    DerivedMetricAnalysisTool,
     DescriptiveAnalysisTool,
     DistributionAnalysisTool,
     FrequencyAnalysisTool,
@@ -320,6 +321,347 @@ def test_grouped_tool_supports_multiple_group_columns(
     assert result.success is True
     assert result.output["group_by"] == ["department", "product"]
     assert result.output["group_count"] == 4
+
+
+def test_derived_metric_tool_returns_ungrouped_sum(
+    analysis_context,
+    statistics_service,
+):
+    tool = DerivedMetricAnalysisTool(
+        analysis_context,
+        statistics_service,
+    )
+
+    result = run_tool(
+        tool,
+        {
+            "dataset_id": "analysis-test-dataset",
+            "left_column": "quantity",
+            "right_column": "amount",
+        },
+    )
+
+    assert result.success is True
+    assert result.error is None
+
+    assert result.output["row_count"] == 6
+    assert result.output["valid_row_count"] == 5
+    assert result.output["excluded_row_count"] == 1
+
+    assert result.output["operator"] == "multiply"
+    assert result.output["aggregation"] == "sum"
+    assert result.output["group_by"] == []
+
+    assert len(result.output["records"]) == 1
+
+    record = result.output["records"][0]
+
+    assert record["valid_row_count"] == 5
+    assert record["result"] == pytest.approx(1730.0)
+
+    assert result.metadata["tool"] == "analysis.derived_metric"
+    assert result.metadata["dataset_id"] == "analysis-test-dataset"
+
+    assert_json_compatible(result.output)
+
+
+def test_derived_metric_tool_supports_grouped_sum(
+    analysis_context,
+    statistics_service,
+):
+    tool = DerivedMetricAnalysisTool(
+        analysis_context,
+        statistics_service,
+    )
+
+    result = run_tool(
+        tool,
+        {
+            "dataset_id": "analysis-test-dataset",
+            "left_column": "quantity",
+            "right_column": "amount",
+            "group_by": ["department"],
+        },
+    )
+
+    assert result.success is True
+
+    assert result.output["row_count"] == 6
+    assert result.output["valid_row_count"] == 5
+    assert result.output["excluded_row_count"] == 1
+    assert result.output["group_by"] == ["department"]
+
+    records = {
+        record["department"]: record
+        for record in result.output["records"]
+    }
+
+    assert records["Sales"]["valid_row_count"] == 3
+    assert records["Sales"]["result"] == pytest.approx(850.0)
+
+    assert records["Support"]["valid_row_count"] == 2
+    assert records["Support"]["result"] == pytest.approx(880.0)
+
+    assert_json_compatible(result.output)
+
+
+def test_derived_metric_tool_preserves_negative_values(
+    analysis_context,
+    statistics_service,
+):
+    dataframe = pd.DataFrame(
+        {
+            "quantity": [2, -3, 1],
+            "amount": [100, 150, -80],
+        }
+    )
+
+    reference = DatasetReference(
+        dataset_id="negative-test-dataset",
+        name="negative-sales",
+        source="negative-sales.csv",
+        file_format="csv",
+        row_count=len(dataframe),
+        column_count=len(dataframe.columns),
+        columns=tuple(dataframe.columns),
+    )
+
+    analysis_context.register_dataset(reference, dataframe)
+
+    tool = DerivedMetricAnalysisTool(
+        analysis_context,
+        statistics_service,
+    )
+
+    result = run_tool(
+        tool,
+        {
+            "dataset_id": "negative-test-dataset",
+            "left_column": "quantity",
+            "right_column": "amount",
+        },
+    )
+
+    assert result.success is True
+
+    assert result.output["row_count"] == 3
+    assert result.output["valid_row_count"] == 3
+    assert result.output["excluded_row_count"] == 0
+
+    # 2*100 + (-3)*150 + 1*(-80) = -330
+    assert result.output["records"][0]["result"] == pytest.approx(
+        -330.0
+    )
+
+    assert_json_compatible(result.output)
+
+
+def test_derived_metric_tool_schema_is_restricted(
+    analysis_context,
+    statistics_service,
+):
+    tool = DerivedMetricAnalysisTool(
+        analysis_context,
+        statistics_service,
+    )
+
+    schema = tool.parameters
+
+    Draft202012Validator.check_schema(schema)
+
+    assert schema["additionalProperties"] is False
+
+    properties = schema["properties"]
+
+    assert properties["operator"]["enum"] == ["multiply"]
+    assert properties["aggregation"]["enum"] == ["sum"]
+
+    assert properties["group_by"]["uniqueItems"] is True
+
+    assert set(schema["required"]) == {
+        "dataset_id",
+        "left_column",
+        "right_column",
+    }
+
+    validator = Draft202012Validator(schema)
+
+    invalid_arguments = {
+        "dataset_id": "analysis-test-dataset",
+        "left_column": "quantity",
+        "right_column": "amount",
+        "expression": "__import__('os').system('id')",
+    }
+
+    assert list(validator.iter_errors(invalid_arguments))
+
+
+def test_derived_metric_tool_schema_rejects_unsupported_operations(
+    analysis_context,
+    statistics_service,
+):
+    tool = DerivedMetricAnalysisTool(
+        analysis_context,
+        statistics_service,
+    )
+
+    validator = Draft202012Validator(tool.parameters)
+
+    arguments = {
+        "dataset_id": "analysis-test-dataset",
+        "left_column": "quantity",
+        "right_column": "amount",
+        "operator": "divide",
+    }
+
+    assert list(validator.iter_errors(arguments))
+
+@pytest.mark.parametrize(
+    ("arguments", "expected_error"),
+    [
+        (
+            {
+                "dataset_id": "analysis-test-dataset",
+                "right_column": "amount",
+            },
+            "left_column",
+        ),
+        (
+            {
+                "dataset_id": "analysis-test-dataset",
+                "left_column": "quantity",
+            },
+            "right_column",
+        ),
+        (
+            {
+                "dataset_id": "analysis-test-dataset",
+                "left_column": "",
+                "right_column": "amount",
+            },
+            "left_column",
+        ),
+        (
+            {
+                "dataset_id": "analysis-test-dataset",
+                "left_column": "quantity",
+                "right_column": "",
+            },
+            "right_column",
+        ),
+        (
+            {
+                "dataset_id": "analysis-test-dataset",
+                "left_column": "quantity",
+                "right_column": "amount",
+                "operator": "divide",
+            },
+            "operator",
+        ),
+        (
+            {
+                "dataset_id": "analysis-test-dataset",
+                "left_column": "quantity",
+                "right_column": "amount",
+                "aggregation": "mean",
+            },
+            "aggregation",
+        ),
+        (
+            {
+                "dataset_id": "analysis-test-dataset",
+                "left_column": "quantity",
+                "right_column": "amount",
+                "group_by": [],
+            },
+            None,
+        ),
+    ],
+)
+def test_derived_metric_tool_validates_arguments(
+    analysis_context,
+    statistics_service,
+    arguments,
+    expected_error,
+):
+    tool = DerivedMetricAnalysisTool(
+        analysis_context,
+        statistics_service,
+    )
+
+    result = run_tool(tool, arguments)
+
+    if expected_error is None:
+        assert result.success is True
+    else:
+        assert result.success is False
+        assert expected_error in result.error
+
+
+@pytest.mark.parametrize(
+    "group_by",
+    [
+        "department",
+        [""],
+        ["department", "department"],
+        [1],
+        [None],
+    ],
+)
+def test_derived_metric_tool_rejects_invalid_group_by(
+    analysis_context,
+    statistics_service,
+    group_by,
+):
+    tool = DerivedMetricAnalysisTool(
+        analysis_context,
+        statistics_service,
+    )
+
+    result = run_tool(
+        tool,
+        {
+            "dataset_id": "analysis-test-dataset",
+            "left_column": "quantity",
+            "right_column": "amount",
+            "group_by": group_by,
+        },
+    )
+
+    assert result.success is False
+    assert "group_by" in result.error
+
+
+@pytest.mark.parametrize(
+    "dropna",
+    [
+        "true",
+        1,
+        None,
+    ],
+)
+def test_derived_metric_tool_rejects_non_boolean_dropna(
+    analysis_context,
+    statistics_service,
+    dropna,
+):
+    tool = DerivedMetricAnalysisTool(
+        analysis_context,
+        statistics_service,
+    )
+
+    result = run_tool(
+        tool,
+        {
+            "dataset_id": "analysis-test-dataset",
+            "left_column": "quantity",
+            "right_column": "amount",
+            "dropna": dropna,
+        },
+    )
+
+    assert result.success is False
+    assert "dropna" in result.error
 
 
 def test_distribution_tool_returns_statistics_and_histogram(

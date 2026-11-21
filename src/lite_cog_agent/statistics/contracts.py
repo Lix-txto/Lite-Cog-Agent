@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from math import isclose, isfinite
 from types import MappingProxyType
-from typing import Any, Mapping
+from typing import Any
 
 from lite_cog_agent.statistics.exceptions import (
     StatisticalValidationError,
@@ -671,3 +672,129 @@ class DistributionAnalysisResult:
             raise StatisticalValidationError(
                 "histogram counts cannot exceed count"
             )
+
+
+@dataclass(frozen=True, slots=True)
+class DerivedMetricAnalysisResult:
+    """Result of a controlled derived metric analysis."""
+
+    dataset_id: str
+    dataset_name: str
+    row_count: int
+    valid_row_count: int
+    excluded_row_count: int
+    left_column: str
+    right_column: str
+    operator: str
+    aggregation: str
+    group_by: tuple[str, ...]
+    records: tuple[Mapping[str, Any], ...]
+
+    def __post_init__(self) -> None:
+        _validate_non_empty_string(self.dataset_id, "dataset_id")
+        _validate_non_empty_string(self.dataset_name, "dataset_name")
+        _validate_non_empty_string(self.left_column, "left_column")
+        _validate_non_empty_string(self.right_column, "right_column")
+
+        for field_name in (
+            "row_count",
+            "valid_row_count",
+            "excluded_row_count",
+        ):
+            _validate_non_negative_integer(
+                getattr(self, field_name),
+                field_name,
+            )
+
+        if self.valid_row_count > self.row_count:
+            raise StatisticalValidationError(
+                "valid_row_count cannot exceed row_count"
+            )
+
+        if (
+            self.valid_row_count + self.excluded_row_count
+            != self.row_count
+        ):
+            raise StatisticalValidationError(
+                "valid_row_count + excluded_row_count "
+                "must equal row_count"
+            )
+
+        if self.operator != "multiply":
+            raise StatisticalValidationError(
+                "operator must be 'multiply'"
+            )
+
+        if self.aggregation != "sum":
+            raise StatisticalValidationError(
+                "aggregation must be 'sum'"
+            )
+
+        _validate_string_tuple(
+            self.group_by,
+            "group_by",
+        )
+
+        if not isinstance(self.records, tuple):
+            raise StatisticalValidationError(
+                "records must be a tuple"
+            )
+
+        if not self.group_by and len(self.records) != 1:
+            raise StatisticalValidationError(
+                "ungrouped analysis must contain exactly one record"
+            )
+
+        normalized_records = tuple(
+            _immutable_mapping(record, "record")
+            for record in self.records
+        )
+
+        total_record_valid_rows = 0
+
+        for index, record in enumerate(normalized_records):
+            if "valid_row_count" not in record:
+                raise StatisticalValidationError(
+                    f"records[{index}] must contain valid_row_count"
+                )
+
+            if "result" not in record:
+                raise StatisticalValidationError(
+                    f"records[{index}] must contain result"
+                )
+
+            record_valid_count = record["valid_row_count"]
+            _validate_non_negative_integer(
+                record_valid_count,
+                f"records[{index}].valid_row_count",
+            )
+
+            record_result = record["result"]
+
+            _validate_finite_number(
+                record_result,
+                f"records[{index}].result",
+                allow_none=True,
+            )
+
+            if record_valid_count == 0 and record_result is not None:
+                raise StatisticalValidationError(
+                    f"records[{index}].result must be None "
+                    "when valid_row_count is zero"
+                )
+
+            if record_valid_count > 0 and record_result is None:
+                raise StatisticalValidationError(
+                    f"records[{index}].result cannot be None "
+                    "when valid_row_count is positive"
+                )
+
+            total_record_valid_rows += record_valid_count
+
+        if total_record_valid_rows != self.valid_row_count:
+            raise StatisticalValidationError(
+                "sum of record valid_row_count values must equal "
+                "valid_row_count"
+            )
+
+        object.__setattr__(self, "records", normalized_records)

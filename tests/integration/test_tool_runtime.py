@@ -5,7 +5,6 @@ from typing import Any
 
 import pytest
 
-from lite_cog_agent.core.tool_calling import ToolCallingLimitError
 from lite_cog_agent.llm.gateway import LLMGateway
 from lite_cog_agent.llm.schemas import (
     LLMMessage,
@@ -437,13 +436,14 @@ async def test_runtime_supports_multiple_sequential_tool_rounds() -> None:
 
 
 @pytest.mark.asyncio
-async def test_runtime_rejects_multiple_tool_calls_in_one_round() -> None:
-    """The Agent runtime default limit should reject a multi-call batch."""
+async def test_runtime_rejects_oversized_batch_and_replans() -> None:
+    """Runtime rejects the complete batch before executing any tool."""
 
     tool = EchoTool()
 
     runtime, provider, gateway = make_runtime(
         [
+            # First response: two calls exceed the runtime default limit.
             LLMResponse(
                 tool_calls=[
                     make_tool_call(
@@ -456,20 +456,91 @@ async def test_runtime_rejects_multiple_tool_calls_in_one_round() -> None:
                     ),
                 ],
             ),
+            # Second response: replan with one legal call.
+            LLMResponse(
+                tool_calls=[
+                    make_tool_call(
+                        call_id="call_003",
+                        value="retry",
+                    ),
+                ],
+            ),
+            # Final synthesis.
+            LLMResponse(
+                content="The retry completed successfully.",
+            ),
         ],
         [tool],
     )
 
     try:
-        with pytest.raises(ToolCallingLimitError):
-            await runtime.tool_calling_service.run(
-                make_request(),
+        result = await runtime.tool_calling_service.run(
+            make_request(),
+        )
+
+        assert result.content == (
+            "The retry completed successfully."
+        )
+
+        # Only the legal retry call should reach EchoTool.
+        assert tool.executed_arguments == [
+            {"value": "retry"},
+        ]
+
+        assert len(provider.requests) == 3
+
+        # The second request contains both rejected tool results.
+        retry_request = provider.requests[1]
+
+        rejected_assistant = retry_request.messages[1]
+        rejected_messages = retry_request.messages[2:4]
+
+        assert rejected_assistant.role == "assistant"
+        assert [
+            call.id for call in rejected_assistant.tool_calls
+        ] == [
+            "call_001",
+            "call_002",
+        ]
+
+        assert len(rejected_messages) == 2
+
+        for expected_id, tool_message in zip(
+            ["call_001", "call_002"],
+            rejected_messages,
+            strict=True,
+        ):
+            assert tool_message.role == "tool"
+            assert tool_message.tool_call_id == expected_id
+
+            payload = json.loads(tool_message.content)
+
+            assert payload["success"] is False
+            assert payload["metadata"]["reason"] == (
+                "max_tool_calls_per_round_exceeded"
+            )
+            assert payload["metadata"]["executed"] is False
+            assert "No tools in this batch were executed" in (
+                payload["error"]
             )
 
-        assert len(provider.requests) == 1
+        # The third request is a normal tool-calling round.
+        # The model returns a final text response without requesting
+        # another tool call, so the registered tool remains available.
+        final_request = provider.requests[2]
 
-        # The complete batch is rejected before dispatch.
-        assert tool.executed_arguments == []
+        assert len(final_request.tools) == 1
+        assert final_request.tools[0].name == "test.echo"
+
+        retry_tool_message = final_request.messages[-1]
+
+        assert retry_tool_message.role == "tool"
+        assert retry_tool_message.tool_call_id == "call_003"
+
+        retry_payload = json.loads(retry_tool_message.content)
+
+        assert retry_payload["success"] is True
+        assert retry_payload["output"]["echoed"] == "retry"
 
     finally:
         await gateway.close()

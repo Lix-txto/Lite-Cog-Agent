@@ -1,11 +1,10 @@
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from lite_cog_agent.core.tool_calling import (
-    ToolCallingError,
     ToolCallingExecution,
-    ToolCallingLimitError,
     ToolCallingProtocolError,
     ToolCallingService,
 )
@@ -298,33 +297,150 @@ async def test_run_performs_final_synthesis_after_max_rounds() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_rejects_too_many_tool_calls_in_one_round() -> None:
-    tool_calls = [
+async def test_run_rejects_oversized_batch_and_replans() -> None:
+    rejected_calls = [
         make_tool_call(call_id="call_001"),
         make_tool_call(call_id="call_002"),
         make_tool_call(call_id="call_003"),
     ]
 
-    response = LLMResponse(
-        tool_calls=tool_calls,
+    retry_call = make_tool_call(
+        call_id="call_004",
+        name="inspect_file",
     )
 
     service, chat, _, dispatcher = make_service(
-        [response],
+        [
+            LLMResponse(
+                content="I will inspect the file and analyze it.",
+                tool_calls=rejected_calls,
+            ),
+            LLMResponse(
+                content="I will retry with one tool call.",
+                tool_calls=[retry_call],
+            ),
+            LLMResponse(
+                content="Analysis completed.",
+            ),
+        ],
         config=ToolCallingConfig(
             max_rounds=2,
             max_tool_calls_per_round=2,
         ),
     )
 
-    with pytest.raises(
-        ToolCallingLimitError,
-        match="exceeds the configured limit",
-    ):
-        await service.run(make_request())
+    before_dispatch = MagicMock()
 
-    assert chat.await_count == 1
+    result = await service.run_with_history(
+        make_request(),
+        before_tool_dispatch=before_dispatch,
+    )
+
+    assert result.response.content == "Analysis completed."
+    assert chat.await_count == 3
+
+    # The oversized batch must not reach the dispatcher.
+    dispatcher.dispatch_many.assert_awaited_once_with(
+        [retry_call]
+    )
+
+    # Only the valid retry consumes tool execution budget.
+    before_dispatch.assert_called_once_with(1)
+
+    # The second LLM request must contain the rejected batch
+    # and one failed Tool Message for every rejected call.
+    retry_request = chat.await_args_list[1].args[0]
+
+    rejected_assistant = retry_request.messages[1]
+    rejected_messages = retry_request.messages[2:5]
+
+    assert rejected_assistant.role == "assistant"
+    assert [
+        call.id for call in rejected_assistant.tool_calls
+    ] == [
+        "call_001",
+        "call_002",
+        "call_003",
+    ]
+
+    assert len(rejected_messages) == 3
+
+    for tool_call, tool_message in zip(
+        rejected_calls,
+        rejected_messages,
+        strict=True,
+    ):
+        assert tool_message.role == "tool"
+        assert tool_message.tool_call_id == tool_call.id
+
+        payload = json.loads(tool_message.content)
+
+        assert payload["success"] is False
+        assert payload["metadata"]["reason"] == (
+            "max_tool_calls_per_round_exceeded"
+        )
+        assert payload["metadata"]["executed"] is False
+        assert "No tools in this batch were executed" in (
+            payload["error"]
+        )
+
+    # Final synthesis must include the successful retry result.
+    final_request = chat.await_args_list[2].args[0]
+
+    assert final_request.tools == []
+    assert final_request.messages[-1].role == "tool"
+    assert final_request.messages[-1].tool_call_id == "call_004"
+
+
+@pytest.mark.asyncio
+async def test_run_bounds_repeated_oversized_batches() -> None:
+    first_batch = [
+        make_tool_call(call_id="call_001"),
+        make_tool_call(call_id="call_002"),
+    ]
+
+    second_batch = [
+        make_tool_call(call_id="call_003"),
+        make_tool_call(call_id="call_004"),
+    ]
+
+    service, chat, _, dispatcher = make_service(
+        [
+            LLMResponse(tool_calls=first_batch),
+            LLMResponse(tool_calls=second_batch),
+            LLMResponse(content="Unable to complete the operation."),
+        ],
+        config=ToolCallingConfig(
+            max_rounds=2,
+            max_tool_calls_per_round=1,
+        ),
+    )
+
+    result = await service.run(make_request())
+
+    assert result.content == "Unable to complete the operation."
+
+    # Two bounded tool-calling rounds and one final synthesis.
+    assert chat.await_count == 3
+
+    # Neither oversized batch may execute.
     dispatcher.dispatch_many.assert_not_awaited()
+
+    final_request = chat.await_args_list[-1].args[0]
+
+    assert final_request.tools == []
+
+    # Both rejected batches must remain in conversation history.
+    assert [
+        message.tool_call_id
+        for message in final_request.messages
+        if message.role == "tool"
+    ] == [
+        "call_001",
+        "call_002",
+        "call_003",
+        "call_004",
+    ]
 
 
 @pytest.mark.asyncio

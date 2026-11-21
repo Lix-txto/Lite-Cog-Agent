@@ -16,12 +16,14 @@ from lite_cog_agent.execution.context import ExecutionContext
 from lite_cog_agent.execution.dataset_store import DatasetReference
 from lite_cog_agent.statistics.contracts import (
     CorrelationAnalysisResult,
+    DerivedMetricAnalysisResult,
     DescriptiveStatisticsResult,
     DistributionAnalysisResult,
     FrequencyAnalysisResult,
     GroupedAnalysisResult,
 )
 from lite_cog_agent.statistics.correlation import CorrelationAnalyzer
+from lite_cog_agent.statistics.derived_metric import DerivedMetricAnalyzer
 from lite_cog_agent.statistics.descriptive import DescriptiveAnalyzer
 from lite_cog_agent.statistics.distribution import DistributionAnalyzer
 from lite_cog_agent.statistics.exceptions import (
@@ -48,6 +50,7 @@ class StatisticalAnalysisService:
         frequency_analyzer: FrequencyAnalyzer | None = None,
         correlation_analyzer: CorrelationAnalyzer | None = None,
         grouped_analyzer: GroupedAnalyzer | None = None,
+        derived_metric_analyzer: DerivedMetricAnalyzer | None = None,
         distribution_analyzer: DistributionAnalyzer | None = None,
     ) -> None:
         self._descriptive_analyzer = (
@@ -74,6 +77,11 @@ class StatisticalAnalysisService:
             distribution_analyzer
             if distribution_analyzer is not None
             else DistributionAnalyzer()
+        )
+        self._derived_metric_analyzer = (
+            derived_metric_analyzer
+            if derived_metric_analyzer is not None
+            else DerivedMetricAnalyzer()
         )
 
     def analyze_descriptive(
@@ -244,6 +252,66 @@ class StatisticalAnalysisService:
 
         return self._process_result(
             operation="grouped",
+            processor=process_result,
+        )
+
+    def analyze_derived_metric(
+        self,
+        context: ExecutionContext,
+        dataset_id: str,
+        *,
+        left_column: str,
+        right_column: str,
+        operator: str = "multiply",
+        aggregation: str = "sum",
+        group_by: list[str] | tuple[str, ...] = (),
+        dropna: bool = True,
+    ) -> DerivedMetricAnalysisResult:
+        """Calculate a controlled derived metric for a dataset."""
+        dataframe, reference = self._get_dataset(
+            context,
+            dataset_id,
+        )
+
+        def process_result() -> DerivedMetricAnalysisResult:
+            records = self._run_analyzer(
+                operation="derived_metric",
+                analyzer=self._derived_metric_analyzer,
+                dataframe=dataframe,
+                left_column=left_column,
+                right_column=right_column,
+                operator=operator,
+                aggregation=aggregation,
+                group_by=group_by,
+                dropna=dropna,
+            )
+
+            valid_row_count = sum(
+                record["valid_row_count"]
+                for record in records
+            )
+
+            row_count = len(dataframe)
+            excluded_row_count = row_count - valid_row_count
+
+            return self._build_result(
+                operation="derived_metric",
+                result_type=DerivedMetricAnalysisResult,
+                dataset_id=reference.dataset_id,
+                dataset_name=reference.name,
+                row_count=row_count,
+                valid_row_count=valid_row_count,
+                excluded_row_count=excluded_row_count,
+                left_column=left_column,
+                right_column=right_column,
+                operator=operator,
+                aggregation=aggregation,
+                group_by=tuple(group_by),
+                records=records,
+            )
+
+        return self._process_result(
+            operation="derived_metric",
             processor=process_result,
         )
 

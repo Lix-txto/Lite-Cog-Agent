@@ -8,6 +8,7 @@ with the configured LLM through LLMGateway.
 from __future__ import annotations
 
 import asyncio
+import json
 
 from lite_cog_agent.config import settings
 from lite_cog_agent.core.agent_budget import (
@@ -19,6 +20,8 @@ from lite_cog_agent.core.agent_state import AgentStateError
 from lite_cog_agent.execution.context import ExecutionContext
 from lite_cog_agent.llm.exceptions import LLMError
 from lite_cog_agent.llm.gateway import LLMGateway
+from lite_cog_agent.llm.schemas import LLMMessage
+from lite_cog_agent.loading.config import DatasetLoadingConfig
 
 
 def print_banner() -> None:
@@ -114,6 +117,169 @@ def print_usage(gateway: LLMGateway) -> None:
     print()
 
 
+def print_tool_execution_trace(
+    messages: list[LLMMessage],
+) -> None:
+    """Display tool execution evidence from Agent conversation messages."""
+
+    tool_results: dict[str, dict | None] = {}
+    duplicate_tool_call_ids: set[str] = set()
+
+    # Index Tool Messages by tool_call_id.
+    # Duplicate IDs are treated as invalid evidence.
+    for message in messages:
+        if message.role != "tool" or not message.tool_call_id:
+            continue
+
+        tool_call_id = message.tool_call_id
+
+        if (
+            tool_call_id in tool_results
+            or tool_call_id in duplicate_tool_call_ids
+        ):
+            duplicate_tool_call_ids.add(tool_call_id)
+            tool_results.pop(tool_call_id, None)
+            continue
+
+        try:
+            payload = json.loads(message.content or "")
+        except (json.JSONDecodeError, TypeError):
+            tool_results[tool_call_id] = None
+            continue
+
+        if isinstance(payload, dict):
+            tool_results[tool_call_id] = payload
+        else:
+            tool_results[tool_call_id] = None
+
+    trace_entries = []
+
+    # Preserve the original Assistant Tool Call order.
+    for message in messages:
+        if message.role != "assistant":
+            continue
+
+        for tool_call in message.tool_calls:
+            if tool_call.id in duplicate_tool_call_ids:
+                trace_entries.append(
+                      {
+                          "tool_call": tool_call,
+                          "status": "INVALID RESULT",
+                          "payload": None,
+                          "reason": "duplicate_tool_messages",
+                      }
+                  )
+                continue
+            if tool_call.id not in tool_results:
+                trace_entries.append(
+                    {
+                        "tool_call": tool_call,
+                        "status": "MISSING RESULT",
+                        "payload": None,
+                    }
+                )
+                continue
+
+            payload = tool_results[tool_call.id]
+
+            if payload is None:
+                trace_entries.append(
+                    {
+                        "tool_call": tool_call,
+                        "status": "INVALID RESULT",
+                        "payload": None,
+                    }
+                )
+                continue
+
+            metadata = payload.get("metadata")
+            if not isinstance(metadata, dict):
+                metadata = {}
+
+            if metadata.get("executed") is False:
+                status = "REJECTED"
+            elif payload.get("success") is True:
+                status = "SUCCESS"
+            elif payload.get("success") is False:
+                status = "FAILED"
+            else:
+                status = "INVALID RESULT"
+
+            trace_entries.append(
+                {
+                    "tool_call": tool_call,
+                    "status": status,
+                    "payload": payload,
+                }
+            )
+
+    if not trace_entries:
+        return
+
+    print()
+    print("Tool Execution Trace")
+    print("-" * 60)
+
+    for index, entry in enumerate(trace_entries, start=1):
+        tool_call = entry["tool_call"]
+        status = entry["status"]
+        payload = entry["payload"]
+
+        print(f"[{index}] {status}")
+        print(f"  Tool       : {tool_call.name}")
+        print(f"  Call ID    : {tool_call.id}")
+
+        if status == "MISSING RESULT":
+            print("  Evidence   : No matching Tool Message found.")
+            print("-" * 60)
+            continue
+
+        if status == "INVALID RESULT":
+            if entry.get("reason") == "duplicate_tool_messages":
+                print(
+                    "  Evidence   : Multiple Tool Messages found "
+                    "for the same tool_call_id."
+                )
+            else:
+                print(
+                    "  Evidence   : Tool Message exists, "
+                    "but its payload is not a valid JSON object."
+                )
+
+            print("-" * 60)
+            continue
+
+        metadata = payload.get("metadata")
+        if not isinstance(metadata, dict):
+            metadata = {}
+
+        execution_time = metadata.get(
+            "execution_time_seconds"
+        )
+        if execution_time is not None:
+            print(f"  Duration   : {execution_time}s")
+
+        error = payload.get("error")
+        if error:
+            print(f"  Error      : {error}")
+
+        output = payload.get("output")
+        if output is not None:
+            print("  Output     :")
+            print(
+                json.dumps(
+                    output,
+                    ensure_ascii=False,
+                    indent=2,
+                    default=str,
+                )
+            )
+
+        print("-" * 60)
+
+    print()
+
+
 def print_response(response) -> None:
     """Display an LLM response and its token usage."""
 
@@ -167,12 +333,18 @@ async def run_interactive() -> None:
         context = ExecutionContext()
 
         try:
+            # Configure dataset loading resource limits.
+            loading_config = DatasetLoadingConfig(
+                max_rows=settings.DATASET_MAX_ROWS,
+            )
+
             # Compose the complete Agent runtime.
             agent = create_agent(
                 gateway,
                 context=context,
                 dataset_root=dataset_root,
                 artifact_root=artifact_root,
+                loading_config=loading_config,
             )
 
             print(
@@ -245,11 +417,20 @@ async def run_interactive() -> None:
 
                 # All ordinary input goes through Agent.
                 try:
+                    # Snapshot history before this request so previous requests'
+                    # tool traces are not displayed again.
+                    messages_before = agent.get_messages()
+
                     response = await agent.run(
                         user_input
                     )
 
+                    messages_after = agent.get_messages()
+                    new_messages = messages_after[len(messages_before):]
+
                     connected = True
+
+                    print_tool_execution_trace(new_messages)
                     print_response(response)
 
                 except AgentBudgetExceededError as exc:

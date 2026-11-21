@@ -8,7 +8,10 @@ from typing import Any
 from lite_cog_agent.execution.context import ExecutionContext
 from lite_cog_agent.profiling.exceptions import ProfilingException
 from lite_cog_agent.profiling.service import ProfilingService
-from lite_cog_agent.statistics.exceptions import StatisticalAnalysisException, StatisticalExecutionError
+from lite_cog_agent.statistics.exceptions import (
+    StatisticalAnalysisException,
+    StatisticalExecutionError,
+)
 from lite_cog_agent.statistics.service import StatisticalAnalysisService
 from lite_cog_agent.tools.base import BaseTool
 from lite_cog_agent.tools.builtin.common import to_json_compatible
@@ -67,9 +70,15 @@ def _failure_result(
         return ToolResult.fail(
             "Dataset is not available in the current execution context."
         )
-    if isinstance(error, (ProfilingException, StatisticalAnalysisException)):
-        message = str(error)
-    elif isinstance(error, ValueError):
+    if isinstance(
+        error,
+        (
+            ProfilingException,
+            StatisticalAnalysisException,
+            ValueError,
+            TypeError,
+        ),
+    ):
         message = str(error)
     elif isinstance(error, KeyError | RuntimeError):
         message = "Dataset is not available in the current execution context."
@@ -678,6 +687,196 @@ class GroupedAnalysisTool(_BaseAnalysisTool):
             )
 
         except Exception as exc:
+            return _failure_result(
+                tool_name=self.name,
+                dataset_id=dataset_id,
+                error=exc,
+            )
+
+
+class DerivedMetricAnalysisTool(_BaseAnalysisTool):
+    """Calculate a controlled derived metric from two dataset columns."""
+
+    SUPPORTED_OPERATORS = ("multiply",)
+    SUPPORTED_AGGREGATIONS = ("sum",)
+
+    def __init__(
+        self,
+        context: ExecutionContext,
+        statistics_service: StatisticalAnalysisService,
+    ) -> None:
+        super().__init__(context)
+
+        if not isinstance(
+            statistics_service,
+            StatisticalAnalysisService,
+        ):
+            raise TypeError(
+                "statistics_service must be a StatisticalAnalysisService"
+            )
+
+        self._statistics_service = statistics_service
+
+    @property
+    def name(self) -> str:
+        return "analysis.derived_metric"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Calculate a controlled derived metric from two numeric "
+            "columns, supporting multiplication followed by summation. "
+            "Optionally group the results by dataset columns."
+        )
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "dataset_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "ID of a dataset loaded in this session.",
+                },
+                "left_column": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Name of the left numeric column.",
+                },
+                "right_column": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Name of the right numeric column.",
+                },
+                "operator": {
+                    "type": "string",
+                    "enum": list(self.SUPPORTED_OPERATORS),
+                    "default": "multiply",
+                },
+                "aggregation": {
+                    "type": "string",
+                    "enum": list(self.SUPPORTED_AGGREGATIONS),
+                    "default": "sum",
+                },
+                "group_by": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "minLength": 1,
+                    },
+                    "uniqueItems": True,
+                    "default": [],
+                },
+                "dropna": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": (
+                        "Whether to exclude rows with missing group keys."
+                    ),
+                },
+            },
+            "required": [
+                "dataset_id",
+                "left_column",
+                "right_column",
+            ],
+            "additionalProperties": False,
+        }
+
+    async def execute(
+        self,
+        arguments: dict[str, Any],
+    ) -> ToolResult:
+        invalid = self._validate_arguments(arguments)
+        if invalid is not None:
+            return invalid
+
+        dataset_id: str | None = None
+
+        try:
+            dataset_id = _get_dataset_id(arguments)
+
+            left_column = arguments.get("left_column")
+            right_column = arguments.get("right_column")
+            operator = arguments.get("operator", "multiply")
+            aggregation = arguments.get("aggregation", "sum")
+            group_by = arguments.get("group_by", [])
+            dropna = arguments.get("dropna", True)
+
+            if (
+                not isinstance(left_column, str)
+                or not left_column.strip()
+            ):
+                raise ValueError(
+                    "left_column must be a non-empty string."
+                )
+
+            if (
+                not isinstance(right_column, str)
+                or not right_column.strip()
+            ):
+                raise ValueError(
+                    "right_column must be a non-empty string."
+                )
+
+            if (
+                not isinstance(operator, str)
+                or operator not in self.SUPPORTED_OPERATORS
+            ):
+                raise ValueError(
+                    f"operator must be one of {self.SUPPORTED_OPERATORS}."
+                )
+
+            if (
+                not isinstance(aggregation, str)
+                or aggregation not in self.SUPPORTED_AGGREGATIONS
+            ):
+                raise ValueError(
+                    "aggregation must be one of "
+                    f"{self.SUPPORTED_AGGREGATIONS}."
+                )
+
+            if not isinstance(group_by, list):
+                raise TypeError(
+                    "group_by must be a list of column names."
+                )
+
+            if any(
+                not isinstance(column, str) or not column.strip()
+                for column in group_by
+            ):
+                raise ValueError(
+                    "group_by must contain non-empty column names."
+                )
+
+            if len(group_by) != len(set(group_by)):
+                raise ValueError(
+                    "group_by cannot contain duplicates."
+                )
+
+            if not isinstance(dropna, bool):
+                raise TypeError("dropna must be a boolean.")
+
+            result = await asyncio.to_thread(
+                self._statistics_service.analyze_derived_metric,
+                self._context,
+                dataset_id,
+                left_column=left_column,
+                right_column=right_column,
+                operator=operator,
+                aggregation=aggregation,
+                group_by=group_by,
+                dropna=dropna,
+            )
+
+            return _success_result(
+                tool_name=self.name,
+                dataset_id=dataset_id,
+                result=result,
+            )
+
+        except Exception as exc:  # noqa: BLE001
             return _failure_result(
                 tool_name=self.name,
                 dataset_id=dataset_id,

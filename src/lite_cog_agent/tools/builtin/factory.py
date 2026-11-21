@@ -13,11 +13,11 @@ from lite_cog_agent.loading.service import DatasetLoadingService
 from lite_cog_agent.profiling.service import ProfilingService
 from lite_cog_agent.statistics.service import StatisticalAnalysisService
 from lite_cog_agent.storage.file_manager import FileManager
-from lite_cog_agent.visualization.service import VisualizationService
 from lite_cog_agent.tools.base import BaseTool
 from lite_cog_agent.tools.builtin.analysis_tools import (
     CorrelationAnalysisTool,
     DatasetProfileTool,
+    DerivedMetricAnalysisTool,
     DescriptiveAnalysisTool,
     DistributionAnalysisTool,
     FrequencyAnalysisTool,
@@ -32,6 +32,7 @@ from lite_cog_agent.tools.builtin.dataset_tools import (
 from lite_cog_agent.tools.builtin.visualization_tools import (
     create_visualization_tools,
 )
+from lite_cog_agent.visualization.service import VisualizationService
 
 
 @dataclass(frozen=True, slots=True)
@@ -241,6 +242,10 @@ def create_builtin_tools(
             statistics_service=services.statistics,
         ),
         GroupedAnalysisTool(
+            context=context,
+            statistics_service=services.statistics,
+        ),
+        DerivedMetricAnalysisTool(
             context=context,
             statistics_service=services.statistics,
         ),
